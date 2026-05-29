@@ -1,4 +1,6 @@
 #![no_std]
+mod nonce;
+use nonce::{consume_nonce, get_nonce};
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, BytesN, Map, Symbol};
 
 // Contract state keys
@@ -67,7 +69,7 @@ impl TimeLockedUpgradeContract {
 
     /// Propose an upgrade with a new WASM hash
     /// This starts the 48-hour timelock period
-    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address) {
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64) {
         let data = Self::get_data(env.clone());
         
         // Only admin can propose upgrades
@@ -76,7 +78,7 @@ impl TimeLockedUpgradeContract {
         }
         
         proposer.require_auth();
-        
+        consume_nonce(&env, &proposer, nonce);
         let current_time = env.ledger().timestamp();
         
         let pending_upgrade = PendingUpgrade {
@@ -89,7 +91,7 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Execute a pending upgrade if the timelock period has passed
-    pub fn execute_upgrade(env: Env, executor: Address) {
+    pub fn execute_upgrade(env: Env, executor: Address, nonce: u64) {
         let data = Self::get_data(env.clone());
         
         // Only admin can execute upgrades
@@ -98,7 +100,7 @@ impl TimeLockedUpgradeContract {
         }
         
         executor.require_auth();
-        
+        consume_nonce(&env, &executor, nonce);
         let pending_upgrade: PendingUpgrade = env
             .storage()
             .instance()
@@ -167,7 +169,7 @@ impl TimeLockedUpgradeContract {
     ///
     /// Also records a heartbeat for the implicit "VALUE" asset so that
     /// `is_data_fresh` can track when the last state mutation occurred.
-    pub fn set_value(env: Env, value: u64, setter: Address) {
+    pub fn set_value(env: Env, value: u64, setter: Address, nonce: u64) {
         let mut data = Self::get_data(env.clone());
         
         // Only admin can set values
@@ -176,7 +178,7 @@ impl TimeLockedUpgradeContract {
         }
         
         setter.require_auth();
-        
+        consume_nonce(&env, &setter, nonce);
         data.value = value;
         env.storage().instance().set(&DATA_KEY, &data);
 
@@ -265,6 +267,9 @@ impl TimeLockedUpgradeContract {
     /// if none has been explicitly set.
     pub fn get_heartbeat_interval(env: Env) -> u64 {
         Self::_get_interval(&env)
+    }
+    pub fn get_coordinator_nonce(env: Env, coordinator: Address) -> u64 {
+        get_nonce(&env, &coordinator)
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
