@@ -5,6 +5,9 @@ use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, E
 const DATA_KEY: Symbol = Symbol::short("DATA");
 const PENDING_UPGRADE_KEY: Symbol = Symbol::short("PENDING");
 const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60; // 48 hours in seconds
+// Dedicated initialization flag — separate from DATA_KEY so the guard survives
+// partial-write failures and is not sensitive to data structure changes.
+const INIT_FLAG_KEY: Symbol = Symbol::short("INITD");
 
 // ── Heartbeat keys (Issue #188) ──────────────────────────────────────────────
 /// Per-asset last-update timestamps: Map<Symbol, u64>
@@ -35,18 +38,23 @@ pub struct TimeLockedUpgradeContract;
 impl TimeLockedUpgradeContract {
     /// Initialize the contract with an admin address
     pub fn initialize(env: Env, admin: Address) {
-        if env.storage().instance().has(&DATA_KEY) {
+        // Primary guard: dedicated initialization flag checked before any write.
+        // Using INIT_FLAG_KEY (not DATA_KEY) so the guard is independent of
+        // the data structure and survives future schema changes.
+        if env.storage().instance().has(&INIT_FLAG_KEY) {
             panic!("contract already initialized");
         }
-        
+
         admin.require_auth();
-        
+
         let data = ContractData {
             admin: admin.clone(),
             value: 0,
         };
-        
+
         env.storage().instance().set(&DATA_KEY, &data);
+        // Set the initialization flag only after all other writes succeed.
+        env.storage().instance().set(&INIT_FLAG_KEY, &true);
     }
 
     /// Get the current contract data

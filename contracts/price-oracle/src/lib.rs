@@ -343,6 +343,12 @@ pub enum Error {
     ContractDestroyed = 20,
     /// Delegate assignment is invalid.
     InvalidDelegate = 21,
+    /// Governance action cannot execute: total votes cast are below the minimum quorum.
+    QuorumNotReached = 22,
+    /// Config rollback failed: no previous value has been backed up for this parameter.
+    NoPreviousConfig = 23,
+    /// Contract has not been initialized yet.
+    NotInitialized = 24,
 }
 
 #[contract]
@@ -448,6 +454,14 @@ fn _is_whitelisted_provider(env: &Env, source: &Address) -> bool {
 fn _require_not_destroyed(env: &Env) {
     if env.storage().instance().has(&DataKey::Destroyed) {
         panic_with_error!(env, Error::ContractDestroyed);
+    }
+}
+
+/// Guard for issue #297: panic if `initialize` or `init_admin` has not been called yet.
+/// Prevents any state-mutating operation from running on an uninitialized contract.
+fn _require_initialized(env: &Env) {
+    if !env.storage().instance().has(&DataKey::Initialized) {
+        panic_with_error!(env, Error::NotInitialized);
     }
 }
 
@@ -704,6 +718,21 @@ impl PriceOracle {
         let mut total_weight: u32 = 0;
 
         for component in components.iter() {
+            // Boundary check (issue #278): reject uninitialized asset pairs before
+            // entering the calculation loop to prevent runtime errors on stale slots.
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::TrackedAsset(component.asset.clone()))
+            {
+                return Err(Error::AssetNotFound);
+            }
+
+            // Reject zero-weight components to avoid silently skewing the index.
+            if component.weight == 0 {
+                return Err(Error::InvalidWeight);
+            }
+
             // Fetch the verified price.
             // If any asset is missing or stale, this cleanly propagates Error::AssetNotFound.
             let price_data = Self::get_price(env.clone(), component.asset.clone(), true)?;
@@ -765,6 +794,7 @@ impl PriceOracle {
     /// in the `VerifiedPrice` bucket.
     pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        _require_initialized(&env);
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -1039,6 +1069,18 @@ impl PriceOracle {
         let mut result = soroban_sdk::Vec::new(&env);
 
         for asset in assets.iter() {
+            // Boundary check (issue #278): skip assets that have not been configured.
+            // This prevents processing uninitialized currency pairs whose price
+            // slots contain stale or zero placeholder data.
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::TrackedAsset(asset.clone()))
+            {
+                result.push_back(None);
+                continue;
+            }
+
             let entry = env
                 .storage()
                 .persistent()
@@ -1421,6 +1463,7 @@ impl PriceOracle {
 
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        _require_initialized(&env);
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
@@ -1579,6 +1622,8 @@ impl PriceOracle {
 
     /// Set an absolute floor price for an asset.
     pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -1592,10 +1637,42 @@ impl PriceOracle {
             );
         }
 
+        // Backup current floor before overwriting (issue #281).
+        if let Some(existing) = read_price_floor(&env, &asset) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PrevPriceFloorEntry(asset.clone()), &existing);
+        }
+
         // Composite key: write directly to the per-asset slot.
         env.storage()
             .persistent()
             .set(&DataKey::PriceFloorEntry(asset), &price_floor);
+    }
+
+    /// Restore the previous price floor for an asset (issue #281).
+    /// Admin-only. Panics if no backup exists.
+    pub fn rollback_price_floor(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let prev: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PrevPriceFloorEntry(asset.clone()))
+            .ok_or(Error::NoPreviousConfig)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceFloorEntry(asset.clone()), &prev);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PrevPriceFloorEntry(asset));
+
+        Ok(())
     }
 
     /// Get the configured absolute floor price for an asset, if any.
@@ -1612,6 +1689,7 @@ impl PriceOracle {
         max_price: i128,
     ) {
         _require_not_destroyed(&env);
+        _require_initialized(&env);
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -1622,11 +1700,47 @@ impl PriceOracle {
             assert!(price_floor <= max_price, "price_floor must be <= max_price");
         }
 
+        // Backup current bounds before overwriting (issue #281).
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PriceBounds>(&DataKey::PriceBoundsEntry(asset.clone()))
+        {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PrevPriceBoundsEntry(asset.clone()), &existing);
+        }
+
         // Composite key: write directly to the per-asset slot — no map load needed.
         env.storage().persistent().set(
             &DataKey::PriceBoundsEntry(asset),
             &PriceBounds { min_price, max_price },
         );
+    }
+
+    /// Restore the previous price bounds for an asset (issue #281).
+    /// Admin-only. Returns `Error::NoPreviousConfig` if no backup exists.
+    pub fn rollback_price_bounds(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let prev: PriceBounds = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PrevPriceBoundsEntry(asset.clone()))
+            .ok_or(Error::NoPreviousConfig)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceBoundsEntry(asset.clone()), &prev);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PrevPriceBoundsEntry(asset));
+
+        Ok(())
     }
 
     /// Get the current min/max price bounds for an asset, if configured.
@@ -1641,6 +1755,7 @@ impl PriceOracle {
     /// This value is applied in `update_price` to reject single-ledger flash crash updates.
     pub fn set_max_deviation_percentage(env: Env, admin: Address, max_deviation_bps: i128) {
         _require_not_destroyed(&env);
+        _require_initialized(&env);
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -1651,9 +1766,45 @@ impl PriceOracle {
             "max_deviation_bps must be <= 10000"
         );
 
+        // Backup current value before overwriting (issue #281).
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, i128>(&DataKey::MaxPriceDeviationBps)
+        {
+            env.storage()
+                .persistent()
+                .set(&DataKey::PrevMaxDeviationBps, &existing);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::MaxPriceDeviationBps, &max_deviation_bps);
+    }
+
+    /// Restore the previous max deviation percentage (issue #281).
+    /// Admin-only. Returns `Error::NoPreviousConfig` if no backup exists.
+    pub fn rollback_max_deviation_percentage(env: Env, admin: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let prev: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PrevMaxDeviationBps)
+            .ok_or(Error::NoPreviousConfig)?;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxPriceDeviationBps, &prev);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PrevMaxDeviationBps);
+
+        Ok(())
     }
 
     /// Get the configured maximum allowed price deviation, or default to 10%.
@@ -1943,6 +2094,39 @@ impl PriceOracle {
     ///
     /// # Returns
     /// The action ID that can be used to vote on this proposal
+    /// Set the minimum number of votes required for a governance proposal to reach quorum (issue #292).
+    /// Admin-only. Default is 1 (no floor) when unset.
+    pub fn set_min_quorum_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        if threshold == 0 {
+            return Err(Error::MultiSigValidationFailed);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MinQuorumThreshold, &threshold);
+
+        env.events().publish(
+            (Symbol::new(&env, "quorum_set"),),
+            (admin, threshold),
+        );
+
+        Ok(())
+    }
+
+    /// Get the configured minimum quorum threshold. Returns 1 if not set (issue #292).
+    pub fn get_min_quorum_threshold(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MinQuorumThreshold)
+            .unwrap_or(1)
+    }
+
     pub fn propose_action(
         env: Env,
         admin: Address,
@@ -2136,6 +2320,17 @@ impl PriceOracle {
         let threshold = crate::auth::_get_required_threshold(&env);
         if !crate::auth::_has_reached_threshold(&env, action_id, threshold) {
             return Err(Error::ThresholdNotReached);
+        }
+
+        // Quorum floor check (issue #292): total votes cast must meet the configured minimum.
+        let total_votes = crate::auth::_get_action_votes(&env, action_id).len();
+        let min_quorum = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::MinQuorumThreshold)
+            .unwrap_or(1);
+        if total_votes < min_quorum {
+            return Err(Error::QuorumNotReached);
         }
 
         // Execute based on action type
