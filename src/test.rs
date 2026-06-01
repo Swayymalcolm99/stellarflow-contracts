@@ -39,7 +39,7 @@ fn test_initialize_and_basic_functionality() {
     assert_eq!(data.admin, admin);
     assert_eq!(data.value, 0);
 
-    client.set_value(&42, &admin, &0);
+    client.set_value(&42, &admin, &0, &u64::MAX);
     let data = client.get_data();
     assert_eq!(data.value, 42);
 }
@@ -56,7 +56,7 @@ fn test_propose_upgrade() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0);
+    client.propose_upgrade(&new_wasm_hash, &admin, &0, &u64::MAX);
 
     let pending = client.get_pending_upgrade();
     assert!(pending.is_some());
@@ -82,7 +82,7 @@ fn test_execute_upgrade_after_timelock() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0);
+    client.propose_upgrade(&new_wasm_hash, &admin, &0, &u64::MAX);
 
     // Fast forward time by 48 hours
     advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
@@ -104,7 +104,7 @@ fn test_cancel_upgrade() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0);
+    client.propose_upgrade(&new_wasm_hash, &admin, &0, &u64::MAX);
     assert!(client.get_pending_upgrade().is_some());
 
     client.cancel_upgrade(&admin);
@@ -125,7 +125,7 @@ fn test_timelock_countdown() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0);
+    client.propose_upgrade(&new_wasm_hash, &admin, &0, &u64::MAX);
 
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
     assert_eq!(remaining, UPGRADE_DELAY_SECONDS);
@@ -453,7 +453,7 @@ fn test_set_value_updates_heartbeat() {
     assert!(!client.is_data_fresh(&value_asset));
 
     // Call set_value — should auto-record heartbeat
-    client.set_value(&42, &admin, &0);
+    client.set_value(&42, &admin, &0, &u64::MAX);
 
     // Now the "VALUE" asset should have a fresh heartbeat
     assert!(client.is_data_fresh(&value_asset));
@@ -464,7 +464,7 @@ fn test_set_value_updates_heartbeat() {
     assert!(!client.is_data_fresh(&value_asset));
 
     // Another set_value call refreshes the heartbeat
-    client.set_value(&100, &admin, &1);
+    client.set_value(&100, &admin, &1, &u64::MAX);
     assert!(client.is_data_fresh(&value_asset));
 }
 
@@ -493,7 +493,7 @@ fn test_unauthorized_set_value_returns_typed_error() {
     let unauthorized = soroban_sdk::Address::generate(&env);
     client.initialize(&admin);
 
-    let result = client.try_set_value(&42, &unauthorized, &0u64);
+    let result = client.try_set_value(&42, &unauthorized, &0u64, &u64::MAX);
     assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
 }
 
@@ -509,4 +509,26 @@ fn test_zero_heartbeat_interval_returns_typed_error() {
 
     let result = client.try_set_heartbeat_interval(&0, &admin);
     assert_eq!(result, Err(Ok(ContractError::InvalidHeartbeatInterval)));
+}
+
+#[test]
+fn test_expired_signature_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    // Advance ledger past the expiry window
+    advance_ledger_timestamp(&env, 1000);
+    let expired_at: u64 = 500; // already in the past
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+    let result = client.try_propose_upgrade(&new_wasm_hash, &admin, &0, &expired_at);
+    assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
+
+    let result = client.try_set_value(&42, &admin, &0, &expired_at);
+    assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 }
