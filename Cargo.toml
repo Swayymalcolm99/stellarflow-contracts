@@ -7,18 +7,21 @@ description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 
 [workspace]
 members = [
+    "contracts/analytics-engine",
     "contracts/hello-world",
     "contracts/ledger-time-helper",
+    "contracts/liquidity-lock",
     "contracts/price-oracle",
     "contracts/reward-splitter",
+    "contracts/gas-tank",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-soroban-sdk = "20.0.0"
+soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 
 [dependencies]
-soroban-sdk = "20.0.0"
+soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 soroban-token-sdk = "20.0.0"
 
 [dev-dependencies]

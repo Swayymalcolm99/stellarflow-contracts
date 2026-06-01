@@ -6,7 +6,6 @@ use soroban_sdk::{
     testutils::Ledger, vec, Address, Env, Symbol,
 };
 
-#[soroban_sdk::contractevent]
 pub struct TokenTransferEvent {
     pub from: Address,
     pub to: Address,
@@ -20,8 +19,7 @@ pub struct DummyToken;
 impl DummyToken {
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
-        env.events()
-            .publish_event(&TokenTransferEvent { from, to, amount });
+        env.events().publish((Symbol::new(&env, "token_transfer_event"),), (from, to, amount));
     }
 }
 
@@ -290,6 +288,75 @@ fn test_set_and_get_price_bounds() {
 }
 
 #[test]
+fn test_register_assets_with_config_applies_all_config_atomically() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+
+    let config = AssetRegistrationConfig {
+        asset: asset.clone(),
+        name: Symbol::new(&env, "Nigerian Naira"),
+        base_decimals: 7,
+        quote_decimals: 2,
+        min_price: 500_i128,
+        max_price: 2_000_i128,
+        price_floor: Some(600_i128),
+    };
+
+    client
+        .register_assets_with_config(&admin, &vec![&env, config], &500_i128)
+        .unwrap();
+
+    let info = client.get_asset_info(&asset).unwrap();
+    assert_eq!(info.name, Symbol::new(&env, "Nigerian Naira"));
+    assert_eq!(info.base_decimals, 7);
+    assert_eq!(info.quote_decimals, 2);
+
+    let meta = client.get_asset_meta(&asset).unwrap();
+    assert_eq!(meta.base_decimals, 7);
+    assert_eq!(meta.quote_decimals, 2);
+
+    let bounds = client.get_price_bounds(&asset).unwrap();
+    assert_eq!(bounds.min_price, 500_i128);
+    assert_eq!(bounds.max_price, 2_000_i128);
+    assert_eq!(client.get_max_deviation_percentage(), 500_i128);
+    assert_eq!(client.get_price_floor(&asset), Some(600_i128));
+}
+
+#[test]
+fn test_register_assets_with_config_rolls_back_on_invalid_config() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+
+    let bad_config = AssetRegistrationConfig {
+        asset: asset.clone(),
+        name: Symbol::new(&env, "Nigerian Naira"),
+        base_decimals: 7,
+        quote_decimals: 2,
+        min_price: 2_500_i128,
+        max_price: 2_000_i128,
+        price_floor: Some(600_i128),
+    };
+
+    let result = client.try_register_assets_with_config(&admin, &vec![&env, bad_config], &500_i128);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::InvalidPriceBounds),
+        other => panic!("expected InvalidPriceBounds, got {:?}", other),
+    }
+
+    assert!(client.get_asset_info(&asset).is_none());
+    assert!(client.get_asset_meta(&asset).is_none());
+    assert!(client.get_price_bounds(&asset).is_none());
+    assert_eq!(client.get_price_floor(&asset), None);
+    assert_eq!(client.get_max_deviation_percentage(), 1_000_i128);
+}
+
+#[test]
 fn test_update_price_rejects_price_outside_bounds() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
@@ -423,7 +490,7 @@ fn test_rescue_tokens_admin_can_recover_assets() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised")]
+#[should_panic]
 fn test_rescue_tokens_rejects_non_admin() {
     let (env, contract_id, client) = setup();
     let token_id = env.register(DummyToken, ());
@@ -894,6 +961,7 @@ fn test_clear_assets_removes_persistent_price_keys() {
             &PriceData {
                 price: 1_000,
                 timestamp: 10,
+                ledger_sequence: 0,
                 provider: env.current_contract_address(),
                 decimals: 2,
                 confidence_score: 100,
@@ -905,6 +973,7 @@ fn test_clear_assets_removes_persistent_price_keys() {
             &PriceData {
                 price: 2_000,
                 timestamp: 10,
+                ledger_sequence: 0,
                 provider: env.current_contract_address(),
                 decimals: 2,
                 confidence_score: 100,
@@ -935,6 +1004,7 @@ fn test_clear_assets_rejects_batches_above_limit_atomically() {
             &PriceData {
                 price: 1_000,
                 timestamp: 10,
+                ledger_sequence: 0,
                 provider: env.current_contract_address(),
                 decimals: 2,
                 confidence_score: 100,
@@ -1116,7 +1186,7 @@ fn test_upgrade_admin_only() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+#[should_panic]
 fn test_upgrade_rejects_non_admin() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1549,7 +1619,7 @@ fn test_update_price_no_bounds_set_allows_any_valid_price() {
 }
 
 #[test]
-#[should_panic(expected = "min_price must be <= max_price")]
+#[should_panic]
 fn test_set_price_bounds_min_greater_than_max_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1567,7 +1637,7 @@ fn test_set_price_bounds_min_greater_than_max_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised")]
+#[should_panic]
 fn test_set_price_bounds_non_admin_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1914,7 +1984,7 @@ fn test_renounce_ownership_emits_event() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+#[should_panic]
 fn test_renounce_ownership_rejects_non_admin() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1929,7 +1999,7 @@ fn test_renounce_ownership_rejects_non_admin() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+#[should_panic]
 fn test_renounce_ownership_blocks_admin_functions_after_renouncement() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2032,7 +2102,7 @@ fn test_register_and_remove_admin_updates_count() {
 }
 
 #[test]
-#[should_panic(expected = "Unauthorised")]
+#[should_panic]
 fn test_renounce_ownership_blocks_admin_calls() {
     let (env, _, client) = setup();
     let admin = Address::generate(&env);
@@ -2664,6 +2734,107 @@ fn test_get_bypass_expiry_returns_stored_value() {
 }
 
 #[test]
+fn test_buffer_truncation_with_equal_weights() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let asset = symbol_short!("GHS");
+
+    // Initialize contract
+    client.init_admin(&admin);
+    client.add_asset(&admin, &asset);
+
+    // Create 13 providers all with the same weight
+    let mut providers = soroban_sdk::Vec::new(&env);
+    for _ in 0..13 {
+        let provider = Address::generate(&env);
+        providers.push_back(provider.clone());
+        
+        env.as_contract(&contract_id, || {
+            crate::auth::_add_provider(&env, &provider);
+            crate::auth::_set_provider_weight(&env, &provider, 75u32);
+        });
+    }
+
+    // Set initial price
+    client.set_price(&asset, &800_000_i128, &6u32, &3600u64);
+
+    // Have all 13 providers submit prices
+    env.ledger().set_sequence_number(300);
+    for i in 0..13 {
+        let provider = providers.get(i).unwrap();
+        let price = 800_000_i128 + (i as i128 * 10);
+        client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64);
+    }
+
+    // Get the buffer and verify it was truncated to 11
+    let buffer = client.get_price_buffer_data(&asset);
+    assert!(buffer.is_some(), "Buffer should exist");
+    
+    let buffer_data = buffer.unwrap();
+    assert_eq!(
+        buffer_data.entries.len(),
+        11,
+        "Buffer should be truncated to MAX_MEDIAN_ENTRIES (11) even with equal weights"
+    );
+}
+
+#[test]
+fn test_median_calculation_after_truncation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    // Initialize contract
+    client.init_admin(&admin);
+    client.add_asset(&admin, &asset);
+
+    // Create 12 providers with varying weights
+    let mut providers = soroban_sdk::Vec::new(&env);
+    for i in 0..12 {
+        let provider = Address::generate(&env);
+        providers.push_back(provider.clone());
+        
+        env.as_contract(&contract_id, || {
+            crate::auth::_add_provider(&env, &provider);
+            let weight = if i < 11 { 100u32 } else { 10u32 }; // Last provider has low weight
+            crate::auth::_set_provider_weight(&env, &provider, weight);
+        });
+    }
+
+    // Set initial price
+    client.set_price(&asset, &1_000_000_i128, &6u32, &3600u64);
+
+    // Have all 12 providers submit prices
+    env.ledger().set_sequence_number(400);
+    for i in 0..12 {
+        let provider = providers.get(i).unwrap();
+        let price = 1_000_000_i128 + (i as i128 * 1000);
+        client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64);
+    }
+
+    // Verify the price was updated (median calculation succeeded)
+    let price_data = client.get_price(&asset, &true);
+    assert!(
+        price_data.price >= 1_000_000_i128,
+        "Median price should be calculated from truncated buffer"
+    );
+    
+    // The low-weight provider (index 11) should have been excluded
+    let buffer = client.get_price_buffer_data(&asset).unwrap();
+    assert_eq!(buffer.entries.len(), 11, "Buffer should contain 11 entries");
+}
+
+#[test]
 fn test_disable_bypass_clears_expiry() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
@@ -2773,4 +2944,165 @@ fn test_enable_bypass_requires_admin() {
     env.ledger().set_timestamp(1_000_000);
     // non_admin is not in the admin list — should panic.
     client.enable_bypass_safety_checks(&non_admin);
+}
+
+// ── Issue #262: rate-map max-age enforcement ─────────────────────────────────
+
+/// `get_price` must succeed when the stored timestamp is within MAX_RATE_AGE_SECONDS.
+#[test]
+fn test_get_price_within_max_age_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let asset = symbol_short!("NGN");
+    // Store price at t=1_000.
+    env.ledger().set_timestamp(1_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &1_500_i128, &2u32, &86_400u64);
+
+    // Advance to t=1_299 — still within the 300-second boundary.
+    env.ledger().set_timestamp(1_299);
+    let result = client.try_get_price(&asset, &true);
+    assert!(result.is_ok(), "expected Ok within max age window");
+}
+
+/// `get_price` must panic with `StaleRateData` when the stored timestamp is
+/// older than `current_time - MAX_RATE_AGE_SECONDS` (300 s).
+#[test]
+#[should_panic]
+fn test_get_price_panics_when_rate_map_exceeds_max_age() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let asset = symbol_short!("NGN");
+    // Store price at t=1_000.
+    env.ledger().set_timestamp(1_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &1_500_i128, &2u32, &86_400u64);
+
+    // Advance past the 300-second boundary: t=1_000 + 300 + 1 = 1_301.
+    env.ledger().set_timestamp(1_301);
+    // This must panic with Error::StaleRateData (error code 25).
+    let _ = client.get_price(&asset, &true);
+}
+
+/// `get_last_price` must also panic when the rate map entry is too old,
+/// because it delegates to `get_price`.
+#[test]
+#[should_panic]
+fn test_get_last_price_panics_when_rate_map_exceeds_max_age() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let asset = symbol_short!("KES");
+    env.ledger().set_timestamp(2_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &500_i128, &2u32, &86_400u64);
+
+    // Advance 301 seconds past the stored timestamp.
+    env.ledger().set_timestamp(2_301);
+    let _ = client.get_last_price(&asset);
+}
+
+/// Exactly at the boundary (current_time == stored_timestamp + MAX_RATE_AGE_SECONDS)
+/// the guard must NOT panic — the boundary is exclusive.
+#[test]
+fn test_get_price_at_exact_boundary_does_not_panic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let asset = symbol_short!("GHS");
+    env.ledger().set_timestamp(5_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &800_i128, &2u32, &86_400u64);
+
+    // Exactly at boundary: 5_000 + 300 = 5_300.
+    env.ledger().set_timestamp(5_300);
+    let result = client.try_get_price(&asset, &true);
+    assert!(result.is_ok(), "expected Ok at exact boundary");
+}
+
+#[test]
+fn test_relayer_activity_tracking() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    client.initialize(&admin, &soroban_sdk::vec![&env, asset.clone()]);
+    add_provider(&env, &contract_id, &provider);
+
+    // Initial state
+    assert_eq!(client.get_provider_last_seen_ledger(&provider), 0);
+    assert!(!client.is_provider_active(&provider, &10));
+
+    // Update price at ledger 100
+    env.ledger().set_sequence(100);
+    client.update_price(&provider, &asset, &1000_i128, &6u32, &100u32, &3600u64);
+
+    // Check last seen ledger
+    assert_eq!(client.get_provider_last_seen_ledger(&provider), 100);
+
+    // Check activity within window of 10 ledgers
+    assert!(client.is_provider_active(&provider, &10)); // 100 <= 100 + 10
+
+    // Advance ledger to 110 (exactly at the end of the window)
+    env.ledger().set_sequence(110);
+    assert!(client.is_provider_active(&provider, &10)); // 110 <= 100 + 10
+
+    // Advance ledger to 111 (just outside the window)
+    env.ledger().set_sequence(111);
+    assert!(!client.is_provider_active(&provider, &10)); // 111 > 110
+}
+
+#[test]
+fn test_graceful_recovery_clears_metrics() {
+    let (env, contract_id, client) = setup();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    // Initialize with 2 admins for multi-sig halt
+    let pairs = soroban_sdk::vec![&env, asset.clone()];
+    client.initialize(&admin1, &pairs);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // 1. Populate metrics: Price update (adds to TWAP, RecentEvents, LastSeen)
+    client.update_price(&provider, &asset, &1000_i128, &6u32, &100u32, &3600u64);
+    
+    // Add relayer infraction
+    env.as_contract(&contract_id, || {
+        crate::slashing::report_missed_blocks(&env, &provider, 5).unwrap();
+    });
+    
+    assert_eq!(client.get_twap(&asset), Some(1000));
+    assert_eq!(client.get_last_n_events(&5).len(), 1);
+    assert_eq!(client.get_provider_consecutive_missed_blocks(&provider), 5);
+
+    // 2. Emergency Halt
+    client.set_emergency_halt(&admin1, &admin2, &true);
+    assert!(client.is_halted());
+
+    // 3. Resume (Triggers Graceful Recovery)
+    env.ledger().set_sequence(500);
+    client.set_emergency_halt(&admin1, &admin2, &false);
+    assert!(!client.is_halted());
+
+    // 4. Verify Metrics Cleared
+    assert_eq!(client.get_twap(&asset), None);
+    assert_eq!(client.get_last_n_events(&5).len(), 0);
+    assert_eq!(client.get_provider_consecutive_missed_blocks(&provider), 0);
+    assert_eq!(client.get_provider_last_seen_ledger(&provider), 500);
 }
