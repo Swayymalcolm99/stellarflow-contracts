@@ -254,6 +254,56 @@ fn test_set_and_get_max_deviation_percentage() {
 }
 
 #[test]
+fn test_set_max_deviation_percentage_rejects_values_below_floor() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+
+    set_admin(&env, &contract_id, &admin);
+
+    let result = client.try_set_max_deviation_percentage(&admin, &50_i128);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidMaxDeviation),
+        other => panic!("expected InvalidMaxDeviation, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_get_max_deviation_percentage_clamps_legacy_low_storage() {
+    let (env, contract_id, client) = setup();
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxPriceDeviationBps, &50_i128);
+    });
+
+    assert_eq!(client.get_max_deviation_percentage(), 100_i128);
+}
+
+#[test]
+fn test_rollback_max_deviation_rejects_values_below_floor() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+
+    set_admin(&env, &contract_id, &admin);
+    client.set_max_deviation_percentage(&admin, &500_i128);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::PrevMaxDeviationBps, &50_i128);
+    });
+
+    let result = client.try_rollback_max_deviation_pct(&admin);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidMaxDeviation),
+        other => panic!("expected InvalidMaxDeviation, got {:?}", other),
+    }
+
+    assert_eq!(client.get_max_deviation_percentage(), 500_i128);
+}
+
+#[test]
 fn test_update_price_rejects_configured_max_deviation() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
@@ -271,6 +321,33 @@ fn test_update_price_rejects_configured_max_deviation() {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
+}
+
+#[test]
+fn test_set_min_quorum_threshold_rejects_values_below_floor() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+
+    set_admin(&env, &contract_id, &admin);
+
+    let result = client.try_set_min_quorum_threshold(&admin, &1u32);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
+        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_get_min_quorum_threshold_clamps_legacy_low_storage() {
+    let (env, contract_id, client) = setup();
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::MinQuorumThreshold, &1u32);
+    });
+
+    assert_eq!(client.get_min_quorum_threshold(), 2u32);
 }
 
 #[test]

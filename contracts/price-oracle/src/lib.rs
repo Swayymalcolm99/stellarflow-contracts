@@ -365,6 +365,9 @@ pub trait TokenContractTrait {
 /// Default maximum allowed percentage change between price updates (10% = 1000 basis points).
 /// This value is used when no configurable max deviation percentage has been set.
 const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
+/// Absolute floor for the configurable max deviation window.
+/// Governance may tighten the window only down to this baseline.
+const MIN_SAFE_MAX_DEVIATION_BPS: i128 = 100;
 
 /// Maximum age (in seconds) for a rate map entry before consumer reads are rejected.
 ///
@@ -378,6 +381,8 @@ pub const MAX_RATE_AGE_SECONDS: u64 = 300;
 /// volatility event is published so downstream contracts (e.g. liquidation bots)
 /// can react without polling.
 const VOLATILITY_THRESHOLD_BPS: i128 = 500;
+/// Absolute floor for governance quorum configuration.
+const MIN_SAFE_QUORUM_THRESHOLD: u32 = 2;
 
 /// ContractError types for the price oracle contract
 #[contracterror]
@@ -1983,7 +1988,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        if max_deviation_bps <= 0 || max_deviation_bps > 10_000 {
+        if max_deviation_bps < MIN_SAFE_MAX_DEVIATION_BPS || max_deviation_bps > 10_000 {
             panic_with_error!(&env, ContractError::InvalidMaxDeviation);
         }
 
@@ -2018,6 +2023,10 @@ impl PriceOracle {
             .get(&DataKey::PrevMaxDeviationBps)
             .ok_or(ContractError::NoPreviousConfig)?;
 
+        if prev < MIN_SAFE_MAX_DEVIATION_BPS {
+            return Err(ContractError::InvalidMaxDeviation);
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::MaxPriceDeviationBps, &prev);
@@ -2034,6 +2043,7 @@ impl PriceOracle {
             .persistent()
             .get(&DataKey::MaxPriceDeviationBps)
             .unwrap_or(MAX_PERCENT_CHANGE_BPS)
+            .max(MIN_SAFE_MAX_DEVIATION_BPS)
     }
 
     /// Get the current ledger sequence number.
@@ -2316,7 +2326,8 @@ impl PriceOracle {
     /// # Returns
     /// The action ID that can be used to vote on this proposal
     /// Set the minimum number of votes required for a governance proposal to reach quorum (issue #292).
-    /// Admin-only. Default is 1 (no floor) when unset.
+    /// Admin-only. Values below the hard floor are rejected, and the getter
+    /// clamps legacy low storage to the same minimum.
     pub fn set_min_quorum_threshold(env: Env, admin: Address, threshold: u32) -> Result<(), ContractError> {
         _require_not_destroyed(&env);
         _require_initialized(&env);
@@ -2324,7 +2335,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        if threshold == 0 {
+        if threshold < MIN_SAFE_QUORUM_THRESHOLD {
             return Err(ContractError::MultiSigValidationFailed);
         }
 
@@ -2340,12 +2351,13 @@ impl PriceOracle {
         Ok(())
     }
 
-    /// Get the configured minimum quorum threshold. Returns 1 if not set (issue #292).
+    /// Get the configured minimum quorum threshold. Returns the hard floor if unset.
     pub fn get_min_quorum_threshold(env: Env) -> u32 {
         env.storage()
             .persistent()
             .get(&DataKey::MinQuorumThreshold)
-            .unwrap_or(1)
+            .unwrap_or(MIN_SAFE_QUORUM_THRESHOLD)
+            .max(MIN_SAFE_QUORUM_THRESHOLD)
     }
 
     pub fn propose_action(
@@ -2589,11 +2601,7 @@ impl PriceOracle {
 
         // Quorum floor check (issue #292): total votes cast must meet the configured minimum.
         let total_votes = crate::auth::_get_action_votes(&env, action_id).len();
-        let min_quorum = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::MinQuorumThreshold)
-            .unwrap_or(1);
+        let min_quorum = Self::get_min_quorum_threshold(env.clone());
         if total_votes < min_quorum {
             return Err(ContractError::QuorumNotReached);
         }
