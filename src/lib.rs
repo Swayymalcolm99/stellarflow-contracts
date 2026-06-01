@@ -25,6 +25,7 @@ pub enum ContractError {
     NoActiveProposal = 15,
     AlreadyVoted = 16,
     ThresholdNotReached = 17,
+    SignatureExpired = 18,
 }
 
 // Contract state keys
@@ -236,7 +237,11 @@ impl TimeLockedUpgradeContract {
         new_wasm_hash: BytesN<32>,
         proposer: Address,
         nonce: u64,
+        sig_expires_at: u64,
     ) -> Result<(), ContractError> {
+        if env.ledger().timestamp() > sig_expires_at {
+            return Err(ContractError::SignatureExpired);
+        }
         let data = Self::get_data(env.clone())?;
         
         // Only admin can propose upgrades
@@ -259,7 +264,10 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Execute a pending upgrade if the timelock period has passed
-    pub fn execute_upgrade(env: Env, executor: Address, nonce: u64) -> Result<(), ContractError> {
+    pub fn execute_upgrade(env: Env, executor: Address, nonce: u64, sig_expires_at: u64) -> Result<(), ContractError> {
+        if env.ledger().timestamp() > sig_expires_at {
+            return Err(ContractError::SignatureExpired);
+        }
         let data = Self::get_data(env.clone())?;
         
         // Only admin can execute upgrades
@@ -336,7 +344,10 @@ impl TimeLockedUpgradeContract {
     ///
     /// Also records a heartbeat for the implicit "VALUE" asset so that
     /// `is_data_fresh` can track when the last state mutation occurred.
-    pub fn set_value(env: Env, value: u64, setter: Address, nonce: u64) -> Result<(), ContractError> {
+    pub fn set_value(env: Env, value: u64, setter: Address, nonce: u64, sig_expires_at: u64) -> Result<(), ContractError> {
+        if env.ledger().timestamp() > sig_expires_at {
+            return Err(ContractError::SignatureExpired);
+        }
         let mut data = Self::get_data(env.clone())?;
         
         // Only admin can set values
@@ -508,7 +519,11 @@ impl TimeLockedUpgradeContract {
         target: Address,
         replacement: Address,
         proposer: Address,
+        sig_expires_at: u64,
     ) -> Result<(), ContractError> {
+        if env.ledger().timestamp() > sig_expires_at {
+            return Err(ContractError::SignatureExpired);
+        }
         proposer.require_auth();
         let data = Self::get_data(env.clone())?;
 
@@ -540,7 +555,10 @@ impl TimeLockedUpgradeContract {
     ///
     /// When the vote count reaches the majority threshold the admin key is
     /// immediately replaced with `replacement`.
-    pub fn vote_revocation(env: Env, voter: Address) -> Result<(), ContractError> {
+    pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
+        if env.ledger().timestamp() > sig_expires_at {
+            return Err(ContractError::SignatureExpired);
+        }
         voter.require_auth();
         let data = Self::get_data(env.clone())?;
 
