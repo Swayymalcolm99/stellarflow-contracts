@@ -865,19 +865,39 @@ fn truncate_buffer_by_weight(env: &Env, buffer: &mut PriceBuffer) {
 
 /// Calculate the median price from the buffer entries.
 /// Returns None if the buffer is empty.
+///
+/// Issue #363: instead of copying every row into a flat vector and sorting all
+/// of them, we compact identical prices into `(price, count)` buckets in one
+/// linear pass ("vector compacting"), so the sort inside the median runs only
+/// over DISTINCT price values. Providers are already deduplicated per ledger
+/// (see `has_provider_submitted`), so identical prices here are independent
+/// votes — `count` preserves their multiplicity and the median is unchanged.
 fn calculate_median_from_buffer(env: &Env, buffer: &PriceBuffer) -> Option<i128> {
     if buffer.entries.len() == 0 {
         return None;
     }
 
-    // Extract prices into a Vec for sorting
-    let mut prices = soroban_sdk::Vec::new(env);
+    // Linear compaction pass: fold identical prices into (price, count) buckets.
+    let mut compacted: soroban_sdk::Vec<(i128, u32)> = soroban_sdk::Vec::new(env);
     for entry in buffer.entries.iter() {
-        prices.push_back(entry.price);
+        let price = entry.price;
+        let len = compacted.len();
+        let mut found = false;
+        for i in 0..len {
+            let (value, count) = compacted.get(i).unwrap();
+            if value == price {
+                compacted.set(i, (value, count + 1));
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            compacted.push_back((price, 1));
+        }
     }
 
-    // Use the existing median calculation
-    crate::median::calculate_median(prices).ok()
+    // Sort distinct values + median via cumulative counts (result-preserving).
+    crate::median::calculate_median_compacted(compacted).ok()
 }
 
 /// Adds an asset to the list of tracked assets if it's not already present.
