@@ -115,7 +115,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn remove_signer(env: Env, signer: Address, caller: Address) -> Result<(), ContractError> {
         Self::assert_contract_is_active(&env)?;
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
 
@@ -130,7 +130,7 @@ impl TimeLockedUpgradeContract {
     pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         voter.require_auth();
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
 
         if !Self::_is_signer(&env, &voter) && data.admin != voter {
             return Err(ContractError::Unauthorized);
@@ -160,13 +160,13 @@ impl TimeLockedUpgradeContract {
 
     // --- Core Logic Boilerplate ---
 
-    pub fn get_data(env: Env) -> Result<ContractData, ContractError> {
+    pub fn get_data(env: &Env) -> Result<ContractData, ContractError> {
         env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
     }
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
         // nonce logic omitted for brevity as per provided snippet
@@ -177,7 +177,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn execute_upgrade(env: Env, executor: Address, _nonce: u64, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
         let pending: PendingUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY).ok_or(ContractError::NoPendingUpgrade)?;
@@ -190,22 +190,22 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn update_heartbeat(env: Env, asset: Symbol, updater: Address) -> Result<(), ContractError> {
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
         if data.admin != updater { return Err(ContractError::NotAdmin); }
         updater.require_auth();
         Self::_record_heartbeat(&env, asset);
         Ok(())
     }
 
-    pub fn is_data_fresh(env: Env, asset: Symbol) -> bool {
-        let timestamps: Map<Symbol, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
+    pub fn is_data_fresh(env: &Env, asset: Symbol) -> bool {
+        let timestamps: Map<Symbol, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(env));
         if let Some(last_update) = timestamps.get(asset) {
-            env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
+            env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(env)
         } else { false }
     }
 
     pub fn register_signer(env: Env, signer: Address, caller: Address) -> Result<(), ContractError> {
-        let data = Self::get_data(env.clone())?;
+        let data = Self::get_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
         let mut signers = Self::_get_signers(&env);
@@ -217,6 +217,13 @@ impl TimeLockedUpgradeContract {
     }
 
     // --- Private Helpers ---
+
+    fn assert_contract_is_active(env: &Env) -> Result<(), ContractError> {
+        if !env.storage().instance().has(&DATA_KEY) {
+            return Err(ContractError::NotInitialized);
+        }
+        Ok(())
+    }
 
     fn _record_heartbeat(env: &Env, asset: Symbol) {
         let mut timestamps: Map<Symbol, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(env));
@@ -239,5 +246,134 @@ impl TimeLockedUpgradeContract {
     fn _revocation_threshold(env: &Env) -> u32 {
         let n = Self::_get_signers(env).len();
         n / 2 + 1
+    }
+}
+
+#[cfg(test)]
+mod query_guardrail_tests {
+    use super::*;
+    use soroban_sdk::{Env, symbol_short};
+    use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+
+    fn setup() -> (Env, crate::TimeLockedUpgradeContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let id = env.register_contract(None, TimeLockedUpgradeContract);
+        let client = crate::TimeLockedUpgradeContractClient::new(&env, &id);
+        (env, client)
+    }
+
+    fn advance(env: &Env, delta: u64) {
+        let ts = env.ledger().timestamp();
+        env.ledger().set(LedgerInfo {
+            timestamp: ts + delta,
+            protocol_version: env.ledger().protocol_version(),
+            sequence_number: env.ledger().sequence(),
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: u32::MAX,
+        });
+    }
+
+    // get_data returns NotInitialized before init and correct data after.
+    #[test]
+    fn test_get_data_before_and_after_init() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+
+        let result = client.try_get_data();
+        assert!(matches!(result, Err(Ok(ContractError::NotInitialized))));
+
+        client.initialize(&admin);
+
+        let data = client.get_data();
+        assert_eq!(data.admin, admin);
+        assert_eq!(data.value, 0);
+    }
+
+    // Calling get_data repeatedly returns the same result without mutating state.
+    #[test]
+    fn test_get_data_is_idempotent() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let first_admin = client.get_data().admin;
+        let first_value = client.get_data().value;
+        let second_admin = client.get_data().admin;
+        let second_value = client.get_data().value;
+
+        assert_eq!(first_admin, second_admin);
+        assert_eq!(first_value, second_value);
+        assert_eq!(first_value, 0);
+    }
+
+    // is_data_fresh returns false for an asset that was never written.
+    #[test]
+    fn test_is_data_fresh_unknown_asset_returns_false() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let asset = symbol_short!("NGN");
+        assert!(!client.is_data_fresh(&asset));
+    }
+
+    // is_data_fresh returns true right after a heartbeat and false once stale.
+    #[test]
+    fn test_is_data_fresh_transitions_on_staleness() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let asset = symbol_short!("KES");
+        client.update_heartbeat(&asset, &admin);
+
+        assert!(client.is_data_fresh(&asset));
+
+        advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
+        assert!(!client.is_data_fresh(&asset));
+    }
+
+    // Calling is_data_fresh multiple times never alters the heartbeat storage slot.
+    #[test]
+    fn test_is_data_fresh_does_not_mutate_heartbeat() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let asset = symbol_short!("GHS");
+        client.update_heartbeat(&asset, &admin);
+
+        for _ in 0..5 {
+            assert!(client.is_data_fresh(&asset));
+        }
+
+        // Advance time fully: data should go stale, confirming heartbeat was not refreshed.
+        advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
+        assert!(!client.is_data_fresh(&asset));
+    }
+
+    // get_data and is_data_fresh are independent: one does not affect the other.
+    #[test]
+    fn test_query_methods_do_not_interfere() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let asset = symbol_short!("CFA");
+
+        let admin_before = client.get_data().admin;
+        let value_before = client.get_data().value;
+
+        let _ = client.is_data_fresh(&asset);
+
+        let admin_after = client.get_data().admin;
+        let value_after = client.get_data().value;
+
+        assert_eq!(admin_before, admin_after);
+        assert_eq!(value_before, value_after);
     }
 }

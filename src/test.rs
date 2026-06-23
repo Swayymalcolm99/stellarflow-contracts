@@ -370,6 +370,92 @@ fn test_unauthorized_set_value() {
 }
 */
 // ═══════════════════════════════════════════════════════════════════════════
+// Read-Only View Guardrails tests (Issue #449)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_get_data_is_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    let first = client.get_data();
+    let second = client.get_data();
+    assert_eq!(first.admin, second.admin);
+    assert_eq!(first.value, second.value);
+}
+
+#[test]
+fn test_is_data_fresh_does_not_mutate_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    let asset = symbol_short!("NGN");
+
+    // Calling is_data_fresh multiple times on the same slot must not alter state
+    assert!(!client.is_data_fresh(&asset));
+    assert!(!client.is_data_fresh(&asset));
+    assert!(!client.is_data_fresh(&asset));
+}
+
+#[test]
+fn test_query_methods_do_not_affect_each_other() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    let asset = symbol_short!("KES");
+
+    // get_data reads contract state; is_data_fresh reads heartbeat storage.
+    // Neither should influence the other's result.
+    let data_before = client.get_data();
+    let _ = client.is_data_fresh(&asset);
+    let data_after = client.get_data();
+
+    assert_eq!(data_before.admin, data_after.admin);
+    assert_eq!(data_before.value, data_after.value);
+}
+
+#[test]
+fn test_get_data_returns_error_before_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_data();
+    assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
+}
+
+#[test]
+fn test_is_data_fresh_returns_false_for_unknown_asset() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    // Any asset that was never written should return false
+    let asset = symbol_short!("GHS");
+    assert!(!client.is_data_fresh(&asset));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Atomic Staking tests (Issue #289)
 // ═══════════════════════════════════════════════════════════════════════════
 
