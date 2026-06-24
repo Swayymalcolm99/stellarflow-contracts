@@ -29,6 +29,7 @@ pub enum ContractError {
     ThresholdNotReached = 17,
     SignatureExpired = 18,
     InvalidSaltSignature = 19,
+    FeeCeilingExceeded = 20,
 }
 
 // Contract state keys
@@ -44,6 +45,7 @@ const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const NODE_PROFILES_KEY: Symbol = symbol_short!("NODES");
 const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
+const MAX_FEE_CEILING: u64 = 1_000_000_000;
 const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 
@@ -70,6 +72,7 @@ pub struct PendingUpgrade {
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
+    pub max_fee_ceiling: u64,
 }
 
 #[contracttype]
@@ -113,7 +116,7 @@ impl TimeLockedUpgradeContract {
             return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
-        let data = ContractData { admin: admin.clone(), value: 0 };
+        let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: MAX_FEE_CEILING };
         env.storage().instance().set(&DATA_KEY, &data);
         Ok(())
     }
@@ -244,6 +247,7 @@ impl TimeLockedUpgradeContract {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         let mut data = Self::get_data(env.clone())?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
+        if new_value > data.max_fee_ceiling { return Err(ContractError::FeeCeilingExceeded); }
         caller.require_auth();
         consume_nonce(&env, &caller, nonce, salt, signature)?;
         data.value = new_value;
@@ -296,39 +300,6 @@ impl TimeLockedUpgradeContract {
         if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
         } else { false }
-    }
-
-    pub fn set_value(env: Env, value: u64, admin: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
-        if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
-        let mut data = Self::get_data(env.clone())?;
-        if data.admin != admin { return Err(ContractError::NotAdmin); }
-        admin.require_auth();
-        consume_nonce(&env, &admin, nonce, salt, salt_signature);
-        data.value = value;
-        env.storage().instance().set(&DATA_KEY, &data);
-        Self::_record_heartbeat(&env, symbol_short!("VALUE"));
-        Ok(())
-    }
-
-    pub fn get_coordinator_nonce(env: Env, coordinator: Address) -> u64 {
-        get_nonce(&env, &coordinator)
-    }
-
-    pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgrade> {
-        env.storage().instance().get(&PENDING_UPGRADE_KEY)
-    }
-
-    pub fn get_upgrade_timelock_remaining(env: Env) -> Option<u64> {
-        let pending: PendingUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY)?;
-        Some(UPGRADE_DELAY_SECONDS.saturating_sub(env.ledger().timestamp().saturating_sub(pending.proposed_at)))
-    }
-
-    pub fn cancel_upgrade(env: Env, admin: Address) -> Result<(), ContractError> {
-        let data = Self::get_data(env.clone())?;
-        if data.admin != admin { return Err(ContractError::NotAdmin); }
-        admin.require_auth();
-        env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        Ok(())
     }
 
     pub fn set_heartbeat_interval(env: Env, interval: u64, admin: Address) -> Result<(), ContractError> {
