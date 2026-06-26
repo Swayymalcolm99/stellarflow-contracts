@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -30,25 +30,13 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "propose_upgrade",
+              "function_name": "register_signer",
               "args": [
                 {
-                  "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u64": 0
-                },
-                {
-                  "bytes": "70726f706f73652d757067726164652d33"
-                },
-                {
-                  "bytes": "931da6eca976e8767a2e448876adadbb2a936787450ecf1d9c7633dedae65e55"
-                },
-                {
-                  "u64": 18446744073709551615
                 }
               ]
             }
@@ -57,82 +45,18 @@
         }
       ]
     ],
-    [],
-    [],
     []
   ],
   "ledger": {
     "protocol_version": 20,
     "sequence_number": 0,
-    "timestamp": 172800,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
-    "base_reserve": 10,
-    "min_persistent_entry_ttl": 0,
-    "min_temp_entry_ttl": 0,
-    "max_entry_ttl": 4294967295,
+    "base_reserve": 0,
+    "min_persistent_entry_ttl": 4096,
+    "min_temp_entry_ttl": 16,
+    "max_entry_ttl": 6312000,
     "ledger_entries": [
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "State"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "State"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "nonce"
-                      },
-                      "val": {
-                        "u64": 1
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "salt_signature"
-                      },
-                      "val": {
-                        "bytes": "931da6eca976e8767a2e448876adadbb2a936787450ecf1d9c7633dedae65e55"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
-        ]
-      ],
       [
         {
           "contract_data": {
@@ -191,33 +115,15 @@
                       },
                       {
                         "key": {
-                          "symbol": "PENDING"
+                          "symbol": "SIGNERS"
                         },
                         "val": {
                           "map": [
                             {
                               "key": {
-                                "symbol": "new_wasm_hash"
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                               },
-                              "val": {
-                                "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "proposer"
-                              },
-                              "val": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "staged_at"
-                              },
-                              "val": {
-                                "u64": 0
-                              }
+                              "val": "void"
                             }
                           ]
                         }
@@ -384,28 +290,16 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "propose_upgrade"
+                "symbol": "register_signer"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u64": 0
-                },
-                {
-                  "bytes": "70726f706f73652d757067726164652d33"
-                },
-                {
-                  "bytes": "931da6eca976e8767a2e448876adadbb2a936787450ecf1d9c7633dedae65e55"
-                },
-                {
-                  "u64": 18446744073709551615
                 }
               ]
             }
@@ -426,7 +320,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "propose_upgrade"
+                "symbol": "register_signer"
               }
             ],
             "data": "void"
@@ -450,32 +344,11 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "get_upgrade_timelock_remaining"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "get_upgrade_timelock_remaining"
+                "symbol": "countersign_admin_change"
               }
             ],
             "data": {
-              "u64": 172800
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
             }
           }
         }
@@ -485,30 +358,6 @@
     {
       "event": {
         "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "get_upgrade_timelock_remaining"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
         "type_": "diagnostic",
         "body": {
@@ -518,40 +367,18 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_upgrade_timelock_remaining"
+                "symbol": "countersign_admin_change"
               }
             ],
             "data": {
-              "u64": 86400
+              "error": {
+                "contract": 29
+              }
             }
           }
         }
       },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "get_upgrade_timelock_remaining"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
+      "failed_call": true
     },
     {
       "event": {
@@ -562,14 +389,55 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_return"
+                "symbol": "error"
               },
               {
-                "symbol": "get_upgrade_timelock_remaining"
+                "error": {
+                  "contract": 29
+                }
               }
             ],
             "data": {
-              "u64": 0
+              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 29
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "contract try_call failed"
+                },
+                {
+                  "symbol": "countersign_admin_change"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    }
+                  ]
+                }
+              ]
             }
           }
         }

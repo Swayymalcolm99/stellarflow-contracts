@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 4,
     "nonce": 0
   },
   "auth": [
@@ -23,8 +23,6 @@
         }
       ]
     ],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -222,11 +220,18 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "is_data_fresh"
+                "symbol": "propose_admin_change"
               }
             ],
             "data": {
-              "u32": 3897123275
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                }
+              ]
             }
           }
         }
@@ -245,16 +250,43 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "is_data_fresh"
+                "symbol": "propose_admin_change"
               }
             ],
             "data": {
-              "bool": false
+              "error": {
+                "contract": 3
+              }
             }
           }
         }
       },
-      "failed_call": false
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "contract": 3
+                }
+              }
+            ],
+            "data": {
+              "string": "escalating Ok(ScErrorType::Contract) frame-exit to Err"
+            }
+          }
+        }
+      },
+      "failed_call": true
     },
     {
       "event": {
@@ -265,89 +297,33 @@
           "v0": {
             "topics": [
               {
-                "symbol": "fn_call"
+                "symbol": "error"
               },
               {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "is_data_fresh"
+                "error": {
+                  "contract": 3
+                }
               }
             ],
             "data": {
-              "u32": 3897123275
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "is_data_fresh"
-              }
-            ],
-            "data": {
-              "bool": false
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "is_data_fresh"
-              }
-            ],
-            "data": {
-              "u32": 3897123275
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "is_data_fresh"
-              }
-            ],
-            "data": {
-              "bool": false
+              "vec": [
+                {
+                  "string": "contract try_call failed"
+                },
+                {
+                  "symbol": "propose_admin_change"
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    },
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                    }
+                  ]
+                }
+              ]
             }
           }
         }
