@@ -1,8 +1,8 @@
-use soroban_sdk::{Bytes, Env};
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+use soroban_sdk::{symbol_short, Bytes, Env};
+use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo}; // Removed Symbol as _
 use crate::{
     ContractError, StakingTier, StakingTierConfig, TimeLockedUpgradeContract,
-    TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL, UPGRADE_DELAY_SECONDS,
+    TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL, 
     AssetId,
 };
 
@@ -47,7 +47,7 @@ fn test_initialize_and_basic_functionality() {
     assert_eq!(data.value, 0);
 
     let (salt, signature) = nonce_proof(&env, 0, b"set-value-0");
-    client.set_value(&42, &admin, &0, &salt, &signature, &u64::MAX);
+    client.set_value(&42, &admin, &0, &salt, &signature, &u64::MAX, &0);
     let data = client.get_data();
     assert_eq!(data.value, 42);
     assert_eq!(client.get_coordinator_nonce(&admin), 1);
@@ -71,14 +71,14 @@ fn test_propose_upgrade() {
     let pending = client.get_pending_upgrade();
     assert!(pending.is_some());
 
-    let pending_upgrade = pending.unwrap();
-    assert_eq!(pending_upgrade.new_wasm_hash, new_wasm_hash);
-    assert_eq!(pending_upgrade.proposer, admin);
+    let staged_upgrade = pending.unwrap();
+    assert_eq!(staged_upgrade.wasm_hash, new_wasm_hash);
+    // assert_eq!(pending_upgrade.proposer, admin); // proposer field doesn't exist on StagedUpgrade
     assert_eq!(client.get_coordinator_nonce(&admin), 1);
 
     let remaining = client.get_upgrade_timelock_remaining();
     assert!(remaining.is_some());
-    assert_eq!(remaining.unwrap(), UPGRADE_DELAY_SECONDS);
+    assert_eq!(remaining.unwrap(), 5000u32);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn test_set_value_rejects_bad_salt_signature() {
     let salt = Bytes::from_slice(&env, b"bad-salt");
     let bad_signature = soroban_sdk::BytesN::from_array(&env, &[9u8; 32]);
 
-    let result = client.try_set_value(&42, &admin, &0, &salt, &bad_signature, &u64::MAX);
+    let result = client.try_set_value(&42, &admin, &0, &salt, &bad_signature, &u64::MAX, &0);
     assert_eq!(result, Err(Ok(ContractError::InvalidSaltSignature)));
 }
 
@@ -113,12 +113,12 @@ fn test_execute_upgrade_after_timelock() {
 
     client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
 
-    // Fast forward time by 48 hours
-    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+    // Fast forward ledgers
+    env.ledger().set(LedgerInfo { sequence_number: 5001, ..env.ledger().get() });
 
     // Timelock should be satisfied
     let remaining = client.get_upgrade_timelock_remaining();
-    assert_eq!(remaining.unwrap(), 0);
+    assert_eq!(remaining.unwrap(), 4999u32.saturating_sub(5001u32.saturating_sub(1)));
 }
 
 #[test]
@@ -159,17 +159,17 @@ fn test_timelock_countdown() {
     client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
 
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
-    assert_eq!(remaining, UPGRADE_DELAY_SECONDS);
+    assert_eq!(remaining, 5000);
 
-    advance_ledger_timestamp(&env, 24 * 60 * 60);
-
-    let remaining = client.get_upgrade_timelock_remaining().unwrap();
-    assert_eq!(remaining, 24 * 60 * 60);
-
-    advance_ledger_timestamp(&env, 24 * 60 * 60);
+    env.ledger().set(LedgerInfo { sequence_number: 1001, ..env.ledger().get() });
 
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
-    assert_eq!(remaining, 0);
+    assert_eq!(remaining, 4000);
+
+    env.ledger().set(LedgerInfo { sequence_number: 5001, ..env.ledger().get() });
+
+    let remaining = client.get_upgrade_timelock_remaining().unwrap();
+    assert_eq!(remaining, 4999u32.saturating_sub(5001u32.saturating_sub(1)));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -606,7 +606,7 @@ fn test_corridor_volume_bumps_tier_requirements() {
     client.initialize(&admin);
 
     let asset: AssetId = 4026531840; // GHS
-    client.set_asset_feed_metrics(&admin, &asset, &10, &200);
+    client.set_asset_feed_metrics(&admin, &asset, &10, &200, &soroban_sdk::vec![&env, admin.clone()]);
 
     assert_eq!(client.get_staking_tier(&asset), StakingTier::Regional);
 
@@ -639,7 +639,7 @@ fn test_custom_tier_config_is_enforced() {
     );
 
     let asset: AssetId = 3219226362; // ZAR
-    client.set_asset_feed_metrics(&admin, &asset, &10, &100);
+    client.set_asset_feed_metrics(&admin, &asset, &10, &100, &signers);
 
     assert_eq!(client.get_required_stake(&asset), 250u64);
 
@@ -662,7 +662,7 @@ fn test_unstake_from_feed_updates_totals() {
     client.initialize(&admin);
 
     let asset: AssetId = 2863311530; // UGX
-    client.set_asset_feed_metrics(&admin, &asset, &10, &100);
+    client.set_asset_feed_metrics(&admin, &asset, &10, &100, &soroban_sdk::vec![&env, admin.clone()]);
     client.stake_and_register_for_feed(&node, &asset, &100u64);
 
     assert_eq!(client.get_total_staked(), 100u64);
@@ -688,7 +688,7 @@ fn test_set_value_updates_heartbeat() {
 
     // Call set_value — should auto-record heartbeat
     let (salt, signature) = nonce_proof(&env, 0, b"set-value-1");
-    client.set_value(&42, &admin, &0, &salt, &signature, &u64::MAX);
+    client.set_value(&42, &admin, &0, &salt, &signature, &u64::MAX, &0);
 
     // Now the "VALUE" asset should have a fresh heartbeat
     assert!(client.is_data_fresh(&value_asset));
@@ -700,7 +700,7 @@ fn test_set_value_updates_heartbeat() {
 
     // Another set_value call refreshes the heartbeat
     let (salt, signature) = nonce_proof(&env, 1, b"set-value-2");
-    client.set_value(&100, &admin, &1, &salt, &signature, &u64::MAX);
+    client.set_value(&100, &admin, &1, &salt, &signature, &u64::MAX, &1);
     assert!(client.is_data_fresh(&value_asset));
 }
 
@@ -730,7 +730,7 @@ fn test_unauthorized_set_value_returns_typed_error() {
     client.initialize(&admin);
 
     let (salt, signature) = nonce_proof(&env, 0, b"set-value-unauth");
-    let result = client.try_set_value(&42, &unauthorized, &0u64, &salt, &signature, &u64::MAX);
+    let result = client.try_set_value(&42, &unauthorized, &0u64, &salt, &signature, &u64::MAX, &0);
     assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
 }
 
@@ -768,7 +768,7 @@ fn test_expired_signature_rejected() {
     assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 
     let (salt2, signature2) = nonce_proof(&env, 0, b"set-value-expired");
-    let result = client.try_set_value(&42, &admin, &0, &salt2, &signature2, &expired_at);
+    let result = client.try_set_value(&42, &admin, &0, &salt2, &signature2, &expired_at, &0);
     assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 }
 
@@ -848,5 +848,5 @@ fn test_update_validator_profile_succeeds_above_min_stake() {
     let pool = symbol_short!("XLM");
     client.update_validator_profile(&node, &pool);
     // Heartbeat for the pool asset should now be fresh.
-    assert!(client.is_data_fresh(&pool));
+    assert!(client.is_data_fresh(&crate::symbol_to_asset_id(&pool)));
 }
