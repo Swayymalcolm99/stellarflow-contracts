@@ -5,6 +5,7 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_sh
 pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
+pub mod admin;
 pub mod consensus;
 pub mod staking_tiers;
 
@@ -48,22 +49,28 @@ pub enum ContractError {
     EmergencyRevocationAlreadyActive = 24,
     /// No emergency revocation is currently active.
     NoActiveEmergencyRevocation = 25,
+    /// An ownership transfer is already pending; cancel it first.
+    TransferAlreadyPending = 26,
+    /// No pending ownership transfer exists to claim.
+    NoPendingOwner = 27,
+    /// Premium pool access requires a minimum stake bond.
+    PremiumPoolAccessDenied = 28,
 }
 
 // Contract state keys
-const DATA_KEY: Symbol = symbol_short!("DATA");
+pub(crate) const DATA_KEY: Symbol = symbol_short!("DATA");
 const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
-const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60; 
+pub(crate) const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60;
 const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
 const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
 const HB_INTERVAL_KEY: Symbol = symbol_short!("HBINTV");
-const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
-const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
+pub(crate) const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
+pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 // Emergency key revocation / blocking
-const REVOKED_SIGNER_KEY: Symbol = symbol_short!("REVOKED");
-const EMERGENCY_REVOCATION_KEY: Symbol = symbol_short!("EMERREV");
+pub(crate) const REVOKED_SIGNER_KEY: Symbol = symbol_short!("REVOKED");
+// EMERGENCY_REVOCATION_KEY is defined in admin.rs
 const NODE_PROFILES_KEY: Symbol = symbol_short!("NODES");
 const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
 const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
@@ -88,14 +95,14 @@ pub struct PendingUpgrade {
 }
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
 }
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StakeRecord {
     pub node: Address,
     pub amount: u64,
@@ -159,6 +166,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn stake_and_register(env: Env, node: Address, amount: u64) -> Result<StakeRecord, ContractError> {
         if amount == 0 { return Err(ContractError::InvalidStakeAmount); }
+        // Guard: a revoked node must not be allowed to re-stake.
+        admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
         let mut stakes: Map<Address, u64> = env.storage().instance().get(&STAKE_REGISTRY_KEY).unwrap_or_else(|| Map::new(&env));
         if stakes.contains_key(node.clone()) { return Err(ContractError::AlreadyRegistered); }
@@ -185,13 +194,13 @@ impl TimeLockedUpgradeContract {
 
     pub fn remove_signer(env: Env, signer: Address, caller: Address) -> Result<(), ContractError> {
         Self::assert_contract_is_active(&env)?;
+        // Guard: a revoked caller must not be able to modify signer sets.
+        admin::assert_not_revoked(&env, &caller)?;
         let data = Self::get_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
 
         let mut signers = Self::_get_signers(&env);
-        
-        // Refactored for Issue #370: Zero-Allocation removal with Map
         signers.remove(signer);
         env.storage().instance().set(&SIGNERS_KEY, &signers);
         Ok(())
@@ -199,6 +208,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        // Guard: a revoked address must not be allowed to vote on governance actions.
+        admin::assert_not_revoked(&env, &voter)?;
         voter.require_auth();
         let data = Self::get_data(&env)?;
 
@@ -208,14 +219,12 @@ impl TimeLockedUpgradeContract {
 
         let mut proposal: RevocationProposal = env.storage().instance().get(&REVOCATION_KEY).ok_or(ContractError::NoActiveProposal)?;
 
-        // Refactored for Issue #370: Use map operations for zero-allocation
         if proposal.votes.contains_key(voter.clone()) {
             return Err(ContractError::AlreadyVoted);
         }
 
-        proposal.votes.set(voter, ()); // Use set for Map
+        proposal.votes.set(voter, ());
 
-        // Optimized verification scan
         let threshold = Self::_revocation_threshold(&env);
         if proposal.votes.len() >= threshold {
             let mut contract_data = data;
@@ -228,7 +237,7 @@ impl TimeLockedUpgradeContract {
         Ok(())
     }
 
-    // --- Core Logic Boilerplate ---
+    // --- Core Logic ---
 
     pub fn get_data(env: &Env) -> Result<ContractData, ContractError> {
         env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
@@ -236,6 +245,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        // Guard: a revoked admin key must not be able to propose upgrades.
+        admin::assert_not_revoked(&env, &proposer)?;
         let data = Self::get_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
@@ -247,6 +258,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn execute_upgrade(env: Env, executor: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        // Guard: a revoked key must not be able to execute upgrades.
+        admin::assert_not_revoked(&env, &executor)?;
         let data = Self::get_data(&env)?;
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
@@ -272,6 +285,8 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn cancel_upgrade(env: Env, canceller: Address) -> Result<(), ContractError> {
+        // Guard: a revoked key must not be able to cancel upgrades.
+        admin::assert_not_revoked(&env, &canceller)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
@@ -281,6 +296,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        // Guard: a revoked admin key must not be able to modify state.
+        admin::assert_not_revoked(&env, &caller)?;
         let mut data = Self::get_data(env.clone())?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
@@ -306,6 +323,8 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_heartbeat_interval(env: Env, interval: u64, admin: Address) -> Result<(), ContractError> {
         if interval == 0 { return Err(ContractError::InvalidHeartbeatInterval); }
+        // Guard: a revoked admin key must not be able to change intervals.
+        admin::assert_not_revoked(&env, &admin)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
@@ -323,6 +342,8 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn update_heartbeat(env: Env, asset: Symbol, updater: Address) -> Result<(), ContractError> {
+        // Guard: a revoked key must not be able to update heartbeats.
+        admin::assert_not_revoked(&env, &updater)?;
         let data = Self::get_data(&env)?;
         if data.admin != updater { return Err(ContractError::NotAdmin); }
         updater.require_auth();
@@ -338,6 +359,8 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn upsert_node_profile(env: Env, admin: Address, node: Address, rate: u64, confidence: u32) -> Result<(), ContractError> {
+        // Guard: a revoked admin key must not be able to update node profiles.
+        admin::assert_not_revoked(&env, &admin)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
@@ -371,6 +394,7 @@ impl TimeLockedUpgradeContract {
         admin: Address,
         config: StakingTierConfig,
     ) -> Result<(), ContractError> {
+        admin::assert_not_revoked(&env, &admin)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
@@ -392,9 +416,6 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Set the volume and volatility profile for a currency feed.
-    ///
-    /// The effective volume score is the greater of the admin floor and the
-    /// on-chain corridor activity derived score.
     pub fn set_asset_feed_metrics(
         env: Env,
         admin: Address,
@@ -402,6 +423,7 @@ impl TimeLockedUpgradeContract {
         volume_score_floor: u32,
         volatility_bps: u32,
     ) -> Result<AssetFeedMetrics, ContractError> {
+        admin::assert_not_revoked(&env, &admin)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
@@ -447,7 +469,6 @@ impl TimeLockedUpgradeContract {
         }
     }
 
-
     /// Return the minimum stake a validator must post for a currency feed.
     pub fn get_required_stake(env: Env, asset: Symbol) -> u64 {
         let tier = Self::get_staking_tier(env.clone(), asset);
@@ -465,7 +486,8 @@ impl TimeLockedUpgradeContract {
         if amount == 0 {
             return Err(ContractError::InvalidStakeAmount);
         }
-
+        // Guard: revoked nodes must not be allowed to register for feeds.
+        admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
 
         let feed_key = StakingStorageKey::FeedStake(node.clone(), asset.clone());
@@ -573,6 +595,8 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn register_signer(env: Env, signer: Address, caller: Address) -> Result<(), ContractError> {
+        // Guard: a revoked caller must not be able to register new signers.
+        admin::assert_not_revoked(&env, &caller)?;
         let data = Self::get_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
@@ -592,6 +616,54 @@ impl TimeLockedUpgradeContract {
 
     pub fn claim_ownership(env: Env, claimer: Address) -> Result<(), ContractError> {
         admin::claim_ownership(&env, claimer)
+    }
+
+    // ── Emergency Key Revocation (multi-sig coordinator group) ───────────────
+
+    /// Phase 1: any registered signer or the current admin opens an emergency
+    /// revocation proposal against a compromised hot-wallet address.
+    ///
+    /// The caller must not be the target.  Only one proposal may be active
+    /// at a time.
+    pub fn propose_emergency_revocation(
+        env: Env,
+        proposer: Address,
+        target: Address,
+        replacement: Address,
+    ) -> Result<(), ContractError> {
+        // Guard: a revoked coordinator must not be able to open proposals.
+        admin::assert_not_revoked(&env, &proposer)?;
+        admin::propose_emergency_revocation(&env, proposer, target, replacement)
+    }
+
+    /// Phase 2: any registered signer or the current admin casts a vote on
+    /// the active emergency revocation proposal.
+    ///
+    /// Once majority threshold is reached the target address is **immediately**
+    /// blocked in storage (`REVOKED_SIGNER_KEY`) and removed from the signer
+    /// set, preventing it from signing or modifying configurations from that
+    /// point forward.
+    pub fn vote_emergency_revocation(
+        env: Env,
+        voter: Address,
+        sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
+        // Guard: a revoked coordinator must not be allowed to vote.
+        admin::assert_not_revoked(&env, &voter)?;
+        admin::vote_emergency_revocation(&env, voter, sig_expires_at)
+    }
+
+    /// Returns the active emergency revocation proposal, if one exists.
+    pub fn get_emergency_revocation_proposal(
+        env: Env,
+    ) -> Option<admin::EmergencyRevocationProposal> {
+        admin::get_emergency_revocation_proposal(&env)
+    }
+
+    /// Returns `true` if `addr` has been stamped as revoked by the
+    /// multi-sig coordinator group.
+    pub fn is_revoked(env: Env, addr: Address) -> bool {
+        admin::is_revoked(&env, &addr)
     }
 
     // --- Private Helpers ---
@@ -639,8 +711,29 @@ impl TimeLockedUpgradeContract {
 
     fn _revocation_threshold(env: &Env) -> u32 {
         let n = Self::_get_signers(env).len();
-        n / 2 + 1
+        if n == 0 { 1 } else { n / 2 + 1 }
     }
+
+    // ── validator profile bond check (Issue #453) ─────────────────────────────
+
+    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
+        // Guard: revoked node must not be able to update its profile.
+        admin::assert_not_revoked(&env, &node)?;
+        node.require_auth();
+
+        let stake = Self::get_stake(env.clone(), node.clone());
+        if stake < crate::validation::PREMIUM_POOL_MIN_STAKE {
+            return Err(ContractError::PremiumPoolAccessDenied);
+        }
+
+        Self::_record_heartbeat(&env, pool);
+        Ok(())
+    }
+}
+
+pub mod validation {
+    /// Minimum stake required to access the premium asset pool.
+    pub const PREMIUM_POOL_MIN_STAKE: u64 = 1_000;
 }
 
 #[cfg(test)]
@@ -671,7 +764,6 @@ mod query_guardrail_tests {
         });
     }
 
-    // get_data returns NotInitialized before init and correct data after.
     #[test]
     fn test_get_data_before_and_after_init() {
         let (env, client) = setup();
@@ -687,7 +779,6 @@ mod query_guardrail_tests {
         assert_eq!(data.value, 0);
     }
 
-    // Calling get_data repeatedly returns the same result without mutating state.
     #[test]
     fn test_get_data_is_idempotent() {
         let (env, client) = setup();
@@ -704,7 +795,6 @@ mod query_guardrail_tests {
         assert_eq!(first_value, 0);
     }
 
-    // is_data_fresh returns false for an asset that was never written.
     #[test]
     fn test_is_data_fresh_unknown_asset_returns_false() {
         let (env, client) = setup();
@@ -715,7 +805,6 @@ mod query_guardrail_tests {
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // is_data_fresh returns true right after a heartbeat and false once stale.
     #[test]
     fn test_is_data_fresh_transitions_on_staleness() {
         let (env, client) = setup();
@@ -731,7 +820,6 @@ mod query_guardrail_tests {
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // Calling is_data_fresh multiple times never alters the heartbeat storage slot.
     #[test]
     fn test_is_data_fresh_does_not_mutate_heartbeat() {
         let (env, client) = setup();
@@ -745,12 +833,10 @@ mod query_guardrail_tests {
             assert!(client.is_data_fresh(&asset));
         }
 
-        // Advance time fully: data should go stale, confirming heartbeat was not refreshed.
         advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // get_data and is_data_fresh are independent: one does not affect the other.
     #[test]
     fn test_query_methods_do_not_interfere() {
         let (env, client) = setup();
@@ -776,4 +862,3 @@ mod query_guardrail_tests {
 
 #[cfg(test)]
 mod test;
-
