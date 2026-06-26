@@ -167,6 +167,31 @@ fn test_is_admin_returns_true_for_current_admin() {
 }
 
 #[test]
+fn test_revoke_key_blocks_compromised_admin_and_provider() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let compromised = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_authorized(&env, &compromised);
+        crate::auth::_add_provider(&env, &compromised);
+    });
+
+    assert!(client.revoke_key(&admin, &compromised));
+
+    env.as_contract(&contract_id, || {
+        assert!(!crate::auth::_is_authorized(&env, &compromised));
+        assert!(!crate::auth::_is_provider(&env, &compromised));
+        assert!(crate::auth::_is_revoked(&env, &compromised));
+    });
+}
+
+#[test]
 #[should_panic]
 fn test_init_admin_panics_when_called_twice() {
     let env = Env::default();
@@ -275,7 +300,7 @@ fn test_add_asset_initializes_zero_price_and_tracks_symbol() {
     });
 
     let asset = symbol_short!("ZAR");
-    client.add_asset(&admin, &asset).unwrap();
+    client.add_asset(&admin, &asset);
 
     let assets = client.get_all_assets();
     assert!(assets.contains(&asset));
@@ -302,7 +327,7 @@ fn test_add_asset_non_admin_is_rejected() {
     });
 
     let asset = symbol_short!("ZAR");
-    client.add_asset(&non_admin, &asset).unwrap();
+    client.add_asset(&non_admin, &asset);
 }
 
 #[test]

@@ -12,7 +12,7 @@
   "ledger": {
     "protocol_version": 25,
     "sequence_number": 2,
-    "timestamp": 1000200,
+    "timestamp": 3001000,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -38,7 +38,7 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "NGN"
+                      "symbol": "GHS"
                     },
                     "val": {
                       "map": [
@@ -63,7 +63,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1500"
+                            "i128": "5000"
                           }
                         },
                         {
@@ -79,7 +79,7 @@
                             "symbol": "timestamp"
                           },
                           "val": {
-                            "u64": "1000000"
+                            "u64": "3001000"
                           }
                         },
                         {
@@ -87,7 +87,7 @@
                             "symbol": "ttl"
                           },
                           "val": {
-                            "u64": "100"
+                            "u64": "3600"
                           }
                         }
                       ]
@@ -127,7 +127,7 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "NGN"
+                            "symbol": "GHS"
                           }
                         ]
                       }
@@ -149,7 +149,43 @@
                                   "symbol": "asset"
                                 },
                                 "val": {
-                                  "symbol": "NGN"
+                                  "symbol": "GHS"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "5000"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "3001000"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "GHS"
                                 }
                               },
                               {
@@ -165,7 +201,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1500"
+                                  "i128": "5000"
                                 }
                               },
                               {
@@ -173,7 +209,7 @@
                                   "symbol": "timestamp"
                                 },
                                 "val": {
-                                  "u64": "1000000"
+                                  "u64": "3000000"
                                 }
                               }
                             ]

@@ -92,9 +92,8 @@ pub fn format_price(env: &Env, price: i128, decimals: u32) -> String {
     }
 
     // --- 3. Wrap in a Soroban String ------------------------------------------
-    // `from_bytes` expects a `soroban_sdk::Bytes`, so we build one from our slice.
-    let bytes = soroban_sdk::Bytes::from_slice(env, &out[..pos]);
-    String::from_bytes(env, &bytes)
+    let text = core::str::from_utf8(&out[..pos]).expect("price formatting produced invalid utf-8");
+    String::from_str(env, text)
 }
 
 pub fn normalize_to_seven(value: i128, input_decimals: u32) -> i128 {
@@ -113,7 +112,10 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> i128 {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+
     use super::*;
+    use alloc::string::ToString;
     use soroban_sdk::Env;
 
     // --- format_price tests ---------------------------------------------------

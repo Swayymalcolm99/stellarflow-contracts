@@ -1,18 +1,41 @@
 {
   "generators": {
-    "address": 1,
+    "address": 2,
     "nonce": 0,
     "mux_id": 0
   },
   "auth": [
     [],
     [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "add_asset",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "symbol": "ZAR"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [],
     []
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 2,
-    "timestamp": 1000200,
+    "sequence_number": 0,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -38,7 +61,7 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "NGN"
+                      "symbol": "ZAR"
                     },
                     "val": {
                       "map": [
@@ -47,7 +70,7 @@
                             "symbol": "confidence_score"
                           },
                           "val": {
-                            "u32": 100
+                            "u32": 0
                           }
                         },
                         {
@@ -55,7 +78,7 @@
                             "symbol": "decimals"
                           },
                           "val": {
-                            "u32": 2
+                            "u32": 0
                           }
                         },
                         {
@@ -63,7 +86,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1500"
+                            "i128": "0"
                           }
                         },
                         {
@@ -79,7 +102,7 @@
                             "symbol": "timestamp"
                           },
                           "val": {
-                            "u64": "1000000"
+                            "u64": "0"
                           }
                         },
                         {
@@ -87,7 +110,7 @@
                             "symbol": "ttl"
                           },
                           "val": {
-                            "u64": "100"
+                            "u64": "0"
                           }
                         }
                       ]
@@ -99,7 +122,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4096
+        "live_until": 4095
       },
       {
         "entry": {
@@ -120,6 +143,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "Admin"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "BaseCurrencyPairs"
                           }
                         ]
@@ -127,7 +166,7 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "NGN"
+                            "symbol": "ZAR"
                           }
                         ]
                       }
@@ -149,7 +188,7 @@
                                   "symbol": "asset"
                                 },
                                 "val": {
-                                  "symbol": "NGN"
+                                  "symbol": "ZAR"
                                 }
                               },
                               {
@@ -165,7 +204,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1500"
+                                  "i128": "0"
                                 }
                               },
                               {
@@ -173,7 +212,7 @@
                                   "symbol": "timestamp"
                                 },
                                 "val": {
-                                  "u64": "1000000"
+                                  "u64": "0"
                                 }
                               }
                             ]
@@ -189,6 +228,26 @@
           "ext": "v0"
         },
         "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "801925984706572462"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
       },
       {
         "entry": {

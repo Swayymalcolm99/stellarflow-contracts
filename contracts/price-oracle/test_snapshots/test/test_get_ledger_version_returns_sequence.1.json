@@ -1,18 +1,17 @@
 {
   "generators": {
-    "address": 3,
+    "address": 1,
     "nonce": 0,
     "mux_id": 0
   },
   "auth": [
     [],
-    [],
     []
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 1,
-    "timestamp": 1700100000,
+    "sequence_number": 42,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -33,39 +32,7 @@
                   "executable": {
                     "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                   },
-                  "storage": [
-                    {
-                      "key": {
-                        "vec": [
-                          {
-                            "symbol": "Admin"
-                          }
-                        ]
-                      },
-                      "val": {
-                        "vec": [
-                          {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "key": {
-                        "vec": [
-                          {
-                            "symbol": "Provider"
-                          },
-                          {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                          }
-                        ]
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    }
-                  ]
+                  "storage": null
                 }
               }
             }
