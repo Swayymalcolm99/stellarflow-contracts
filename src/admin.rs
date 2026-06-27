@@ -2,6 +2,7 @@ use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
 
 pub(crate) const PENDING_OWNER_KEY: Symbol = symbol_short!("PNDOWN");
+pub(crate) const PAUSED_KEY: Symbol = symbol_short!("PAUSED");
 
 // ── Emergency key revocation ─────────────────────────────────────────────
 
@@ -297,19 +298,24 @@ pub fn claim_ownership(env: &Env, claimer: Address) -> Result<(), ContractError>
     Ok(())
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────
-
-fn _get_signers(env: &Env) -> Map<Address, ()> {
-    env.storage()
+/// Emergency stop: verified coordinator sets the global is_paused flag.
+pub fn set_paused(env: &Env, caller: Address, paused: bool) -> Result<(), ContractError> {
+    let data: ContractData = env
+        .storage()
         .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env))
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if data.admin != caller {
+        return Err(ContractError::NotAdmin);
+    }
+    caller.require_auth();
+
+    env.storage().instance().set(&PAUSED_KEY, &paused);
+    Ok(())
 }
 
-/// Majority threshold: more than half of the registered signers must vote.
-/// The admin's vote also counts (they are allowed to vote).
-fn _revocation_threshold(env: &Env) -> u32 {
-    let n = _get_signers(env).len();
-    // At least one vote is always required, even if no signers are registered.
-    if n == 0 { 1 } else { n / 2 + 1 }
+/// Returns true when the contract is in emergency-paused state.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().instance().get(&PAUSED_KEY).unwrap_or(false)
 }
