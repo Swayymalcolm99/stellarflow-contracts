@@ -49,6 +49,8 @@ pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod auth;
+pub mod admin;
+pub mod storage;
 pub mod consensus;
 pub mod math;
 pub mod staking_tiers;
@@ -97,9 +99,8 @@ pub enum ContractError {
     TransferAlreadyPending = 24,
     /// No pending owner nominee exists to claim ownership.
     NoPendingOwner = 25,
-    /// Incoming telemetry payload timestamp is older than the maximum
-    /// allowed age (60 seconds behind the current ledger block time).
-    StaleTelemetryPayload = 26,
+    /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
+    StaleSequence = 26,
 }
 
 // Contract state keys
@@ -119,9 +120,12 @@ const MAX_FEE_CEILING: u64 = 1_000_000_000;
 const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQ");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
+const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
 // Telemetry TTL configuration: expire after validation window closes
 const HEARTBEAT_TTL_LEDGERS: u32 = 17_280; // ~24 hours at 5s/ledger
 const HEARTBEAT_TTL_THRESHOLD: u32 = 5_000; // Extend when < 5000 ledgers remain
+/// Number of ledgers to extend the contract instance TTL by on admin actions.
+const INSTANCE_TTL_EXTEND: u32 = 10_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -194,13 +198,15 @@ pub struct TimeLockedUpgradeContract;
 
 #[contractimpl]
 impl TimeLockedUpgradeContract {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
+    pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: MAX_FEE_CEILING };
         env.storage().instance().set(&DATA_KEY, &data);
+        // #439: write treasury once at deployment; never overwritten
+        env.storage().instance().set(&TREASURY_KEY, &treasury);
         Ok(())
     }
 
@@ -241,6 +247,7 @@ impl TimeLockedUpgradeContract {
         // Refactored for Issue #370: Zero-Allocation removal with Map
         signers.remove(signer);
         env.storage().instance().set(&SIGNERS_KEY, &signers);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -289,6 +296,7 @@ impl TimeLockedUpgradeContract {
         consume_nonce(&env, &proposer, nonce, salt, salt_signature);
         let staged = StagedUpgrade { wasm_hash: new_wasm_hash.into(), staged_at: env.ledger().sequence() };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -304,6 +312,7 @@ impl TimeLockedUpgradeContract {
         }
         env.deployer().update_current_contract_wasm(BytesN::from_array(&env, &pending.wasm_hash));
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -322,6 +331,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -337,6 +347,7 @@ impl TimeLockedUpgradeContract {
         data.value = new_value;
         env.storage().instance().set(&DATA_KEY, &data);
         Self::_record_heartbeat(&env, symbol_short!("VALUE"));
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -359,6 +370,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         env.storage().instance().set(&HB_INTERVAL_KEY, &interval);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -388,6 +400,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != updater { return Err(ContractError::NotAdmin); }
         updater.require_auth();
         Self::_record_heartbeat(&env, asset);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -405,6 +418,7 @@ impl TimeLockedUpgradeContract {
         let mut profiles = Self::_get_node_profiles(&env);
         profiles.set(node.clone(), NodeProfile { node, rate, confidence, updated_at: env.ledger().timestamp() });
         env.storage().persistent().set(&NODE_PROFILES_KEY, &profiles);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -443,6 +457,7 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .instance()
             .set(&StakingStorageKey::TierConfig, &config);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -482,6 +497,7 @@ impl TimeLockedUpgradeContract {
             .persistent()
             .set(&StakingStorageKey::AssetMetrics(asset.clone()), &metrics);
 
+        Self::_extend_instance_ttl(&env);
         Ok(metrics)
     }
 
@@ -630,17 +646,41 @@ impl TimeLockedUpgradeContract {
             signers.set(signer, ());
             env.storage().instance().set(&SIGNERS_KEY, &signers);
         }
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
     // --- Admin Ownership Transfer (Issue #429) ---
 
     pub fn propose_ownership_transfer(env: Env, current_admin: Address, nominee: Address) -> Result<(), ContractError> {
-        admin::propose_ownership_transfer(&env, current_admin, nominee)
+        admin::propose_ownership_transfer(&env, current_admin, nominee)?;
+        Self::_extend_instance_ttl(&env);
+        Ok(())
     }
 
     pub fn claim_ownership(env: Env, claimer: Address) -> Result<(), ContractError> {
-        admin::claim_ownership(&env, claimer)
+        admin::claim_ownership(&env, claimer)?;
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    // #439: read-only treasury accessor; no setter exposed
+    pub fn get_treasury(env: Env) -> Result<Address, ContractError> {
+        env.storage().instance().get(&TREASURY_KEY).ok_or(ContractError::NotInitialized)
+    }
+
+    // #423: emergency pause controls
+    pub fn set_paused(env: Env, caller: Address, paused: bool) -> Result<(), ContractError> {
+        admin::set_paused(&env, caller, paused)
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        admin::is_paused(&env)
+    }
+
+    // #432: pre-flight rent check hook
+    pub fn preflight_rent_check(env: Env) {
+        storage::preflight_rent_check(&env)
     }
 
     // --- Private Helpers ---
@@ -648,6 +688,9 @@ impl TimeLockedUpgradeContract {
     fn assert_contract_is_active(env: &Env) -> Result<(), ContractError> {
         if !env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::NotInitialized);
+        }
+        if admin::is_paused(env) {
+            return Err(ContractError::ContractPaused);
         }
         Ok(())
     }
@@ -686,6 +729,13 @@ impl TimeLockedUpgradeContract {
             &NODE_PROFILES_KEY,
             RELAYER_TTL_THRESHOLD,
             env.storage().max_ttl(),
+        );
+    }
+
+    fn _extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(
+            RELAYER_TTL_THRESHOLD,
+            RELAYER_TTL_THRESHOLD + INSTANCE_TTL_EXTEND,
         );
     }
 
@@ -753,7 +803,8 @@ mod query_guardrail_tests {
         let result = client.try_get_data();
         assert!(matches!(result, Err(Ok(ContractError::NotInitialized))));
 
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let data = client.get_data();
         assert_eq!(data.admin, admin);
@@ -765,7 +816,8 @@ mod query_guardrail_tests {
     fn test_get_data_is_idempotent() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let first_admin = client.get_data().admin;
         let first_value = client.get_data().value;
@@ -782,7 +834,8 @@ mod query_guardrail_tests {
     fn test_is_data_fresh_unknown_asset_returns_false() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let asset: AssetId = 3897123275; // NGN
         assert!(!client.is_data_fresh(&asset));
@@ -793,7 +846,8 @@ mod query_guardrail_tests {
     fn test_is_data_fresh_transitions_on_staleness() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let asset: AssetId = 2654435761; // KES
         client.update_heartbeat(&asset, &admin);
@@ -809,7 +863,8 @@ mod query_guardrail_tests {
     fn test_is_data_fresh_does_not_mutate_heartbeat() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let asset: AssetId = 4026531840; // GHS
         client.update_heartbeat(&asset, &admin);
@@ -828,7 +883,8 @@ mod query_guardrail_tests {
     fn test_query_methods_do_not_interfere() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let asset: AssetId = 4160749568; // CFA
 
