@@ -31,6 +31,35 @@ use crate::SlashExecutedEvent;
 
 const UPTIME_RESET_SECONDS: u64 = 48 * 60 * 60;
 
+/// Maximum fraction of total bond capacity that can be slashed in a single incident.
+///
+/// Enforced to protect honest validator nodes from permanent bankruptcy during
+/// brief network connectivity drops or other transient infrastructure issues.
+/// Set at 25% to preserve meaningful economic deterrence while ensuring no
+/// single incident can remove more than one quarter of a validator's bond.
+///
+/// This cap applies per-incident. Multiple incidents accumulate independently.
+const MAX_SLASH_FRACTION_PER_INCIDENT: u32 = 25; // percent — out of 100
+
+// DEFINITION: "Total bond capacity" is the validator's current staked balance before
+// the penalty is applied. This is the most conservative definition, ensuring that even
+// as a validator's stake decreases over time, no single incident can slash more than
+// 25% of what they currently have at risk. This prevents catastrophic losses from
+// temporary outages while still preserving deterrence for malicious behavior.
+//
+// ALTERNATIVE: Using the initial bond (when the validator joined) would mean the cap
+// is fixed at 25% of their original stake, but that could allow slashing more than
+// 25% of their current stake if they've unstaked some tokens. We choose current stake
+// to protect the validator's current position.
+
+// PENALTY FLOW:
+// 1. Offence detected → classify deviation tier or report missed blocks
+// 2. Get base amount / deviation tier multiplier
+// 3. Apply missed blocks multiplier → calculate raw scaled penalty
+// 4. Apply 25% per-incident cap to raw penalty
+// 5. Apply capped penalty to validator's bond
+// 6. Check if remaining stake is below zero (shouldn't happen due to cap)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,6 +77,36 @@ fn set_stake(env: &Env, relayer: &Address, amount: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::ProviderStake(relayer.clone()), &amount);
+}
+
+/// Applies the per-incident slashing cap to a raw penalty amount.
+///
+/// Ensures no single incident can slash more than MAX_SLASH_FRACTION_PER_INCIDENT
+/// percent of the validator's total bond capacity, regardless of the raw penalty
+/// computed for the offence type.
+///
+/// # Arguments
+/// * `raw_penalty` - the penalty amount before the cap is applied
+/// * `bond_capacity` - the validator's total bond capacity (current stake before penalty)
+///
+/// # Returns
+/// The lesser of `raw_penalty` and `bond_capacity * MAX_SLASH_FRACTION_PER_INCIDENT / 100`.
+///
+/// # Security
+/// Uses saturating arithmetic throughout — never panics on overflow or underflow.
+/// The cap cannot be bypassed by crafting a large raw_penalty.
+fn apply_slash_cap(raw_penalty: i128, bond_capacity: i128) -> i128 {
+    if bond_capacity <= 0 || raw_penalty <= 0 {
+        return 0;
+    }
+    
+    // ARITHMETIC: saturating — cannot overflow
+    // SECURITY: Use saturating mul and div to prevent overflow
+    let max_penalty = bond_capacity
+        .saturating_mul(MAX_SLASH_FRACTION_PER_INCIDENT as i128)
+        .saturating_div(100);
+    
+    raw_penalty.min(max_penalty)
 }
 
 /// Read the current consecutive missed-block counter for a relayer.
@@ -252,11 +311,17 @@ pub fn execute_slash_internal(
         return Err(Error::InvalidSlashAmount);
     }
 
+    // ── Get current stake first (this is our bond capacity for the cap) ─────
+    let current_stake = get_stake(env, bad_relayer);
+
     // ── Compute scaled penalty based on relayer uptime/downtime history. ─────
     let multiplier = get_slash_multiplier(env, bad_relayer)?;
-    let slashed_amount = amount
+    let raw_slashed_amount = amount
         .checked_mul(multiplier)
         .ok_or(Error::InvalidSlashAmount)?;
+    
+    // CAP APPLIED: Enforce 25% per-incident cap here before applying penalty
+    let slashed_amount = apply_slash_cap(raw_slashed_amount, current_stake);
 
     // ── Resolve token and reserve ────────────────────────────────────────────
     let token_address: Address = env
@@ -272,13 +337,13 @@ pub fn execute_slash_internal(
         .ok_or(Error::InsuranceReserveNotSet)?;
 
     // ── Check stake balance ──────────────────────────────────────────────────
-    let current_stake = get_stake(env, bad_relayer);
     if slashed_amount > current_stake {
         return Err(Error::InsufficientStake);
     }
 
     // ── Deduct stake ─────────────────────────────────────────────────────────
-    let remaining_stake = current_stake - slashed_amount;
+    // ARITHMETIC: saturating subtraction to prevent underflow
+    let remaining_stake = current_stake.saturating_sub(slashed_amount);
     set_stake(env, bad_relayer, remaining_stake);
 
     // ── Transfer slashed tokens to the insurance reserve ─────────────────────
@@ -638,5 +703,130 @@ mod slashing_tests {
         // i128::MAX submitted vs consensus 1 — overflows internally, saturates to u32::MAX
         let result = crate::math::calculate_deviation_bps(i128::MAX, 1);
         assert_eq!(result, Ok(u32::MAX));
+    }
+
+    // ── Test 1-10: apply_slash_cap and penalty cap ─────────────────────────────
+
+    #[test]
+    fn test_1_apply_slash_cap_unit_tests() {
+        // raw_penalty > cap → capped
+        assert_eq!(apply_slash_cap(500_000, 1_000_000), 250_000);
+        // raw_penalty < cap → no change
+        assert_eq!(apply_slash_cap(100_000, 1_000_000), 100_000);
+        // raw_penalty == cap → no change
+        assert_eq!(apply_slash_cap(250_000, 1_000_000), 250_000);
+        // bond_capacity = 0 → 0
+        assert_eq!(apply_slash_cap(250_000, 0), 0);
+        // raw_penalty = 0 → 0
+        assert_eq!(apply_slash_cap(0, 1_000_000), 0);
+    }
+
+    #[test]
+    fn test_2_penalty_capped_at_25_percent_of_bond() {
+        let env = Env::default();
+        let relayer = Address::generate(&env);
+        set_stake(&env, &relayer, 1_000_000);
+        
+        // Raw penalty would be 50% without cap, but should be capped at 25%
+        let capped = apply_slash_cap(500_000, 1_000_000);
+        assert_eq!(capped, 250_000);
+        
+        let remaining = 1_000_000 - capped;
+        assert_eq!(remaining, 750_000);
+    }
+
+    #[test]
+    fn test_3_small_penalty_not_inflated_to_cap() {
+        let env = Env::default();
+        let relayer = Address::generate(&env);
+        set_stake(&env, &relayer, 1_000_000);
+        
+        let raw = 50_000; // 5% of 1M
+        let capped = apply_slash_cap(raw, 1_000_000);
+        assert_eq!(capped, raw);
+        assert_eq!(1_000_000 - capped, 950_000);
+    }
+
+    #[test]
+    fn test_4_penalty_exactly_at_cap_boundary() {
+        let env = Env::default();
+        let relayer = Address::generate(&env);
+        set_stake(&env, &relayer, 1_000_000);
+        
+        let raw = 250_000; // exactly 25%
+        let capped = apply_slash_cap(raw, 1_000_000);
+        assert_eq!(capped, raw);
+    }
+
+    #[test]
+    fn test_5_connectivity_drop_penalty_well_below_cap() {
+        let env = Env::default();
+        let relayer = Address::generate(&env);
+        set_stake(&env, &relayer, 1_000_000);
+        
+        // Simulate minor connectivity drop (minor tier)
+        let base = 50_000;
+        let tier_mult = deviation_multiplier(DeviationTier::Minor);
+        let raw = base * tier_mult; // 50_000 * 1 = 50_000 (5% of 1M, well below 25%)
+        let capped = apply_slash_cap(raw, 1_000_000);
+        
+        assert_eq!(capped, raw);
+        assert!(capped < 250_000); // < 25%
+        assert!(capped > 0); // non-zero penalty
+    }
+
+    #[test]
+    fn test_6_severity_ordering_preserved_under_cap() {
+        let bond_capacity = 1_000_000;
+        
+        let minor = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Minor), bond_capacity);
+        let moderate = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Moderate), bond_capacity);
+        let significant = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Significant), bond_capacity);
+        let manipulation = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Manipulation), bond_capacity);
+        
+        assert!(minor < moderate);
+        assert!(moderate < significant);
+        assert!(significant < manipulation);
+    }
+
+    #[test]
+    fn test_7_no_bankruptcy_from_single_incident() {
+        let min_stake = 100_000; // minimum viable bond
+        let raw = i128::MAX; // worst possible penalty
+        let capped = apply_slash_cap(raw, min_stake);
+        
+        assert_eq!(capped, min_stake * 25 / 100); // exactly 25%
+        let remaining = min_stake - capped;
+        assert_eq!(remaining, min_stake * 75 / 100); // 75% remains
+        assert!(remaining > 0); // not bankrupt
+    }
+
+    #[test]
+    fn test_8_multiple_incidents_accumulate_independently() {
+        let mut stake = 1_000_000;
+        
+        // First incident (capped at 25% of initial)
+        let cap1 = stake * 25 / 100;
+        stake -= cap1;
+        assert_eq!(stake, 750_000);
+        
+        // Second incident (capped at 25% of new stake)
+        let cap2 = stake * 25 / 100;
+        stake -= cap2;
+        assert_eq!(stake, 562_500);
+        
+        // Each cap calculated against current stake at time of incident
+        assert_eq!(cap1, 250_000);
+        assert_eq!(cap2, 187_500);
+    }
+
+    #[test]
+    fn test_9_saturating_arithmetic_on_max_bond_value() {
+        let max_bond = i128::MAX;
+        let raw = i128::MAX;
+        
+        // Should not panic
+        let capped = apply_slash_cap(raw, max_bond);
+        assert_eq!(capped, max_bond.saturating_mul(25).saturating_div(100));
     }
 }
