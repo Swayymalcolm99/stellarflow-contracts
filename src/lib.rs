@@ -57,6 +57,8 @@ use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod admin;
 pub mod auth;
+pub mod config;
+pub use config::{PriceVarianceConfig, get_price_variance_config, set_price_variance_config};
 pub mod consensus;
 pub mod staking_tiers;
 pub mod storage;
@@ -113,6 +115,8 @@ pub enum ContractError {
     FeeCeilingExceeded = 27,
     /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
     StaleSequence = 26,
+    /// A price-variance configuration field violated one or more struct invariants.
+    InvalidVarianceConfig = 28,
 }
 
 // Contract state keys
@@ -698,6 +702,30 @@ impl TimeLockedUpgradeContract {
 
     pub fn is_paused(env: Env) -> bool {
         admin::is_paused(&env)
+    }
+
+    // ── Price-Variance Configuration (Issue #420) ─────────────────────────
+
+    /// Replace the complete price-variance configuration in one atomic write.
+    ///
+    /// Accepts the **full** [`PriceVarianceConfig`] struct; individual field
+    /// mutations are intentionally not exposed so that all ledger storage slots
+    /// remain uniformly aligned after every update.
+    pub fn set_price_variance_config(
+        env: Env,
+        caller: Address,
+        cfg: PriceVarianceConfig,
+    ) -> Result<(), ContractError> {
+        config::set_price_variance_config(&env, &caller, cfg)?;
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the active price-variance configuration.
+    ///
+    /// Falls back to compile-time defaults when no config has been written yet.
+    pub fn get_price_variance_config(env: Env) -> PriceVarianceConfig {
+        config::get_price_variance_config(&env)
     }
 
     // #432: pre-flight rent check hook
