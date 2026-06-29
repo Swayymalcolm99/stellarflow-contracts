@@ -15,6 +15,53 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "register_signer",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "register_signer",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
@@ -81,6 +128,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 },
                 {
                   "u32": 10
@@ -191,6 +239,7 @@
                 },
                 {
                   "u32": 3897123275
+                  "u32": 3897123275
                 },
                 {
                   "u32": 80
@@ -305,6 +354,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 },
                 {
                   "u64": 100
@@ -331,6 +381,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
+                  "u32": 3897123275
                   "u32": 3897123275
                 },
                 {
@@ -381,6 +432,7 @@
                     {
                       "key": {
                         "u32": 2654435761
+                        "u32": 2654435761
                       },
                       "val": {
                         "u64": 0
@@ -388,6 +440,7 @@
                     },
                     {
                       "key": {
+                        "u32": 3897123275
                         "u32": 3897123275
                       },
                       "val": {
@@ -414,6 +467,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 }
               ]
             },
@@ -433,6 +487,7 @@
                       "symbol": "AssetMetrics"
                     },
                     {
+                      "u32": 2654435761
                       "u32": 2654435761
                     }
                   ]
@@ -476,6 +531,7 @@
                 },
                 {
                   "u32": 3897123275
+                  "u32": 3897123275
                 }
               ]
             },
@@ -495,6 +551,7 @@
                       "symbol": "AssetMetrics"
                     },
                     {
+                      "u32": 3897123275
                       "u32": 3897123275
                     }
                   ]
@@ -541,6 +598,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 }
               ]
             },
@@ -563,6 +621,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                     },
                     {
+                      "u32": 2654435761
                       "u32": 2654435761
                     }
                   ]
@@ -592,6 +651,7 @@
                 },
                 {
                   "u32": 3897123275
+                  "u32": 3897123275
                 }
               ]
             },
@@ -614,6 +674,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                     },
                     {
+                      "u32": 3897123275
                       "u32": 3897123275
                     }
                   ]
@@ -730,6 +791,14 @@
                         "val": {
                           "u64": 10100
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                        }
                       }
                     ]
                   }
@@ -738,7 +807,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ],
       [
@@ -1122,7 +1191,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ]
     ]
@@ -1147,7 +1216,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                }
+              ]
             }
           }
         }
@@ -1308,6 +1384,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 },
                 {
                   "u32": 10
@@ -1397,6 +1474,7 @@
                 },
                 {
                   "u32": 3897123275
+                  "u32": 3897123275
                 },
                 {
                   "u32": 80
@@ -1481,6 +1559,7 @@
             ],
             "data": {
               "u32": 2654435761
+              "u32": 2654435761
             }
           }
         }
@@ -1529,6 +1608,7 @@
               }
             ],
             "data": {
+              "u32": 3897123275
               "u32": 3897123275
             }
           }
@@ -1579,6 +1659,7 @@
             ],
             "data": {
               "u32": 2654435761
+              "u32": 2654435761
             }
           }
         }
@@ -1627,6 +1708,7 @@
               }
             ],
             "data": {
+              "u32": 3897123275
               "u32": 3897123275
             }
           }
@@ -1682,6 +1764,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 },
                 {
                   "u64": 100
@@ -1723,6 +1806,7 @@
                     "symbol": "asset"
                   },
                   "val": {
+                    "u32": 2654435761
                     "u32": 2654435761
                   }
                 },
@@ -1782,6 +1866,7 @@
                 },
                 {
                   "u32": 2654435761
+                  "u32": 2654435761
                 }
               ]
             }
@@ -1837,6 +1922,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
+                  "u32": 3897123275
                   "u32": 3897123275
                 },
                 {
@@ -1931,6 +2017,7 @@
                     },
                     {
                       "u32": 3897123275
+                      "u32": 3897123275
                     },
                     {
                       "u64": 100
@@ -1968,6 +2055,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
+                  "u32": 3897123275
                   "u32": 3897123275
                 },
                 {
@@ -2010,6 +2098,7 @@
                     "symbol": "asset"
                   },
                   "val": {
+                    "u32": 3897123275
                     "u32": 3897123275
                   }
                 },
@@ -2068,6 +2157,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
+                  "u32": 3897123275
                   "u32": 3897123275
                 }
               ]

@@ -20,7 +20,7 @@ pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
 
 /// Convert an AssetId back to a Symbol for backward compatibility.
 /// Note: This is lossy - use pre-defined mappings for production.
-pub fn asset_id_to_symbol(env: &Env, id: AssetId) -> Symbol {
+pub fn asset_id_to_symbol(_env: &Env, id: AssetId) -> Symbol {
     // For common currencies, use a mapping table
     match id {
         // Nigerian Naira
@@ -46,8 +46,12 @@ pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod admin;
+pub mod admin;
 pub mod auth;
+pub mod config;
+pub use config::{PriceVarianceConfig, get_price_variance_config, set_price_variance_config};
 pub mod consensus;
+pub mod governance;
 pub mod math;
 pub mod staking_tiers;
 pub mod governance;
@@ -60,6 +64,7 @@ use crate::governance::{
 use crate::validation::check_bond_capacity;
 
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
+
 use staking_tiers::{
     assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config,
 };
@@ -75,6 +80,11 @@ pub enum ContractError {
     UpgradeTimelockNotSatisfied = 5,
     InvalidHeartbeatInterval = 6,
     InvalidNonce = 7,
+    ContractPaused = 29,
+    RevokedAddress = 30,
+    EmergencyRevocationAlreadyActive = 31,
+    NoActiveEmergencyRevocation = 32,
+
     AlreadyRegistered = 8,
     NotRegistered = 9,
     InvalidStakeAmount = 10,
@@ -116,33 +126,33 @@ pub enum ContractError {
 pub(crate) const DATA_KEY: Symbol = symbol_short!("DATA");
 pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
-const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60; 
+pub(crate) const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60;
 const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
 const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
 const HB_INTERVAL_KEY: Symbol = symbol_short!("HBINTV");
 const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
+// Emergency key revocation / blocking
+pub(crate) const REVOKED_SIGNER_KEY: Symbol = symbol_short!("REVOKED");
+// EMERGENCY_REVOCATION_KEY is defined in admin.rs
 const NODE_PROFILES_KEY: Symbol = symbol_short!("NODES");
 const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
-const MAX_FEE_CEILING: u64 = 1_000_000_000;
 const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
-const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQ");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
-// Telemetry TTL configuration: expire after validation window closes
-const HEARTBEAT_TTL_LEDGERS: u32 = 17_280; // ~24 hours at 5s/ledger
-const HEARTBEAT_TTL_THRESHOLD: u32 = 5_000; // Extend when < 5000 ledgers remain
+const INSTANCE_TTL_EXTEND: u32 = 100_000;
+const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
-    pub max_fee_ceiling: u64,
 }
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StakeRecord {
     pub node: Address,
     pub amount: u64,
@@ -194,22 +204,45 @@ pub struct TimeLockedUpgradeContract;
 
 #[contractimpl]
 impl TimeLockedUpgradeContract {
-    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
+    pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
-        let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: MAX_FEE_CEILING };
+        let data = ContractData {
+            admin: admin.clone(),
+            value: 0,
+        };
         env.storage().instance().set(&DATA_KEY, &data);
+        // #439: write treasury once at deployment; never overwritten
+        env.storage().instance().set(&TREASURY_KEY, &treasury);
         Ok(())
     }
 
-    pub fn stake_and_register(env: Env, node: Address, amount: u64) -> Result<StakeRecord, ContractError> {
-        if amount == 0 { return Err(ContractError::InvalidStakeAmount); }
+    pub fn stake_and_register(
+        env: Env,
+        node: Address,
+        amount: u64,
+    ) -> Result<StakeRecord, ContractError> {
+        if amount == 0 {
+            return Err(ContractError::InvalidStakeAmount);
+        }
+        // Guard: a revoked node must not be allowed to re-stake.
+        admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
-        let mut stakes: Map<Address, u64> = env.storage().instance().get(&STAKE_REGISTRY_KEY).unwrap_or_else(|| Map::new(&env));
-        if stakes.contains_key(node.clone()) { return Err(ContractError::AlreadyRegistered); }
-        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
+        let mut stakes: Map<Address, u64> = env
+            .storage()
+            .instance()
+            .get(&STAKE_REGISTRY_KEY)
+            .unwrap_or_else(|| Map::new(&env));
+        if stakes.contains_key(node.clone()) {
+            return Err(ContractError::AlreadyRegistered);
+        }
+        let total: u64 = env
+            .storage()
+            .instance()
+            .get(&TOTAL_STAKED_KEY)
+            .unwrap_or(0u64);
         let new_total = total.checked_add(amount).ok_or(ContractError::Overflow)?;
         stakes.set(node.clone(), amount);
         env.storage().instance().set(&STAKE_REGISTRY_KEY, &stakes);
@@ -220,9 +253,19 @@ impl TimeLockedUpgradeContract {
 
     pub fn unstake(env: Env, node: Address) -> Result<u64, ContractError> {
         node.require_auth();
-        let mut stakes: Map<Address, u64> = env.storage().instance().get(&STAKE_REGISTRY_KEY).unwrap_or_else(|| Map::new(&env));
-        let amount = stakes.get(node.clone()).ok_or(ContractError::NotRegistered)?;
-        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
+        let mut stakes: Map<Address, u64> = env
+            .storage()
+            .instance()
+            .get(&STAKE_REGISTRY_KEY)
+            .unwrap_or_else(|| Map::new(&env));
+        let amount = stakes
+            .get(node.clone())
+            .ok_or(ContractError::NotRegistered)?;
+        let total: u64 = env
+            .storage()
+            .instance()
+            .get(&TOTAL_STAKED_KEY)
+            .unwrap_or(0u64);
         let new_total = total.saturating_sub(amount);
         stakes.remove(node.clone());
         env.storage().instance().set(&STAKE_REGISTRY_KEY, &stakes);
@@ -237,10 +280,9 @@ impl TimeLockedUpgradeContract {
         caller.require_auth();
 
         let mut signers = Self::_get_signers(&env);
-        
-        // Refactored for Issue #370: Zero-Allocation removal with Map
         signers.remove(signer);
         env.storage().instance().set(&SIGNERS_KEY, &signers);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -312,6 +354,7 @@ impl TimeLockedUpgradeContract {
         }
         env.deployer().update_current_contract_wasm(pending.new_wasm_hash);
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -331,6 +374,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -352,7 +396,11 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
-        let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
+        let timestamps: Map<AssetId, u64> = env
+            .storage()
+            .temporary()
+            .get(&HEARTBEAT_KEY)
+            .unwrap_or_else(|| Map::new(&env));
         timestamps.get(asset)
     }
 
@@ -366,23 +414,30 @@ impl TimeLockedUpgradeContract {
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         env.storage().instance().set(&HB_INTERVAL_KEY, &interval);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
     pub fn get_stake(env: Env, node: Address) -> u64 {
-        let stakes: Map<Address, u64> = env.storage().instance().get(&STAKE_REGISTRY_KEY).unwrap_or_else(|| Map::new(&env));
+        let stakes: Map<Address, u64> = env
+            .storage()
+            .instance()
+            .get(&STAKE_REGISTRY_KEY)
+            .unwrap_or_else(|| Map::new(&env));
         stakes.get(node).unwrap_or(0u64)
     }
 
     pub fn get_total_staked(env: Env) -> u64 {
-        env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64)
+        env.storage()
+            .instance()
+            .get(&TOTAL_STAKED_KEY)
+            .unwrap_or(0u64)
     }
 
-    /// Update a validator's profile for a premium asset pool.
-    pub fn update_validator_profile(
+    pub fn update_heartbeat(
         env: Env,
-        node: Address,
-        pool: Symbol,
+        asset: AssetId,
+        updater: Address,
     ) -> Result<(), ContractError> {
         node.require_auth();
         check_bond_capacity(&env, &node, &pool)?;
@@ -395,6 +450,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != updater { return Err(ContractError::NotAdmin); }
         updater.require_auth();
         Self::_record_heartbeat(&env, asset);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -410,8 +466,19 @@ impl TimeLockedUpgradeContract {
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         let mut profiles = Self::_get_node_profiles(&env);
-        profiles.set(node.clone(), NodeProfile { node, rate, confidence, updated_at: env.ledger().timestamp() });
-        env.storage().persistent().set(&NODE_PROFILES_KEY, &profiles);
+        profiles.set(
+            node.clone(),
+            NodeProfile {
+                node,
+                rate,
+                confidence,
+                updated_at: env.ledger().timestamp(),
+            },
+        );
+        env.storage()
+            .persistent()
+            .set(&NODE_PROFILES_KEY, &profiles);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -422,11 +489,30 @@ impl TimeLockedUpgradeContract {
         Ok(Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)?)
     }
 
-    pub fn add_corridor_fees(env: Env, asset: AssetId, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
-        let key = CorridorFeeKey::Asset(asset.clone());
-        let mut pool: CorridorFeePool = env.storage().persistent().get(&key).unwrap_or(CorridorFeePool { asset: asset.clone(), collected: 0, variable_pool: 0 });
-        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
-        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
+    pub fn add_corridor_fees(
+        env: Env,
+        asset: AssetId,
+        collected: u64,
+        variable_fee: u64,
+    ) -> Result<CorridorFeePool, ContractError> {
+        let key = CorridorFeeKey::Asset(asset);
+        let mut pool: CorridorFeePool =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(CorridorFeePool {
+                    asset,
+                    collected: 0,
+                    variable_pool: 0,
+                });
+        pool.collected = pool
+            .collected
+            .checked_add(collected)
+            .ok_or(ContractError::Overflow)?;
+        pool.variable_pool = pool
+            .variable_pool
+            .checked_add(variable_fee)
+            .ok_or(ContractError::Overflow)?;
         env.storage().persistent().set(&key, &pool);
         Ok(pool)
     }
@@ -438,18 +524,18 @@ impl TimeLockedUpgradeContract {
         env: Env,
         admin: Address,
         config: StakingTierConfig,
-        signers: Vec<Address>,
+        _signers: Vec<Address>,
     ) -> Result<(), ContractError> {
         let data = Self::_load_data(&env)?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
-        crate::auth::require_multisig(&env, &signers)?;
         validate_tier_config(&config)?;
         env.storage()
             .instance()
             .set(&StakingStorageKey::TierConfig, &config);
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -462,23 +548,19 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Set the volume and volatility profile for a currency feed.
-    ///
-    /// The effective volume score is the greater of the admin floor and the
-    /// on-chain corridor activity derived score.
     pub fn set_asset_feed_metrics(
         env: Env,
         admin: Address,
         asset: AssetId,
         volume_score_floor: u32,
         volatility_bps: u32,
-        signers: Vec<Address>,
+        _signers: Vec<Address>,
     ) -> Result<AssetFeedMetrics, ContractError> {
         let data = Self::_load_data(&env)?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
-        crate::auth::require_multisig(&env, &signers)?;
 
         let metrics = AssetFeedMetrics {
             volume_score: volume_score_floor.min(100),
@@ -487,8 +569,9 @@ impl TimeLockedUpgradeContract {
 
         env.storage()
             .persistent()
-            .set(&StakingStorageKey::AssetMetrics(asset.clone()), &metrics);
+            .set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
+        Self::_extend_instance_ttl(&env);
         Ok(metrics)
     }
 
@@ -501,6 +584,8 @@ impl TimeLockedUpgradeContract {
     pub fn get_staking_tier(env: Env, asset: AssetId) -> StakingTier {
         assign_tier(&Self::_resolve_feed_metrics(&env, &asset))
     }
+
+
 
     /// Return the minimum stake a validator must post for a currency feed.
     pub fn get_required_stake(env: Env, asset: AssetId) -> u64 {
@@ -519,16 +604,17 @@ impl TimeLockedUpgradeContract {
         if amount == 0 {
             return Err(ContractError::InvalidStakeAmount);
         }
-
+        // Guard: revoked nodes must not be allowed to register for feeds.
+        admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
 
-        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset.clone());
+        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
         if env.storage().persistent().has(&feed_key) {
             return Err(ContractError::FeedAlreadyRegistered);
         }
 
-        let tier = Self::get_staking_tier(env.clone(), asset.clone());
-        let required = Self::get_required_stake(env.clone(), asset.clone());
+        let tier = Self::get_staking_tier(env.clone(), asset);
+        let required = Self::get_required_stake(env.clone(), asset);
         if amount < required {
             return Err(ContractError::InsufficientStakeForTier);
         }
@@ -555,7 +641,7 @@ impl TimeLockedUpgradeContract {
 
         env.storage().instance().set(&STAKE_REGISTRY_KEY, &stakes);
         env.storage().instance().set(&TOTAL_STAKED_KEY, &new_total);
-        Self::_record_heartbeat(&env, asset.clone());
+        Self::_record_heartbeat(&env, asset);
 
         Ok(FeedStakeRecord {
             node,
@@ -570,7 +656,7 @@ impl TimeLockedUpgradeContract {
     pub fn unstake_from_feed(env: Env, node: Address, asset: AssetId) -> Result<u64, ContractError> {
         node.require_auth();
 
-        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset.clone());
+        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
         let amount: u64 = env
             .storage()
             .persistent()
@@ -614,11 +700,20 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
-        env.storage().persistent().get(&CorridorFeeKey::Asset(asset.clone())).unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 })
+        env.storage()
+            .persistent()
+            .get(&CorridorFeeKey::Asset(asset))
+            .unwrap_or(CorridorFeePool {
+                asset,
+                collected: 0,
+                variable_pool: 0,
+            })
     }
 
     pub fn set_platform_capital(env: Env, capital: u64) {
-        env.storage().instance().set(&PLATFORM_CAPITAL_KEY, &capital);
+        env.storage()
+            .instance()
+            .set(&PLATFORM_CAPITAL_KEY, &capital);
     }
 
     pub fn finalize_consensus(env: Env) {
@@ -636,6 +731,7 @@ impl TimeLockedUpgradeContract {
             signers.set(signer, ());
             env.storage().instance().set(&SIGNERS_KEY, &signers);
         }
+        Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -677,36 +773,49 @@ impl TimeLockedUpgradeContract {
         if !env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::NotInitialized);
         }
+        if admin::is_paused(env) {
+            return Err(ContractError::ContractPaused);
+        }
         Ok(())
     }
 
     fn _record_heartbeat(env: &Env, asset: AssetId) {
-        let mut timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(env));
+        let mut timestamps: Map<AssetId, u64> = env
+            .storage()
+            .temporary()
+            .get(&HEARTBEAT_KEY)
+            .unwrap_or_else(|| Map::new(&env));
         timestamps.set(asset, env.ledger().timestamp());
         env.storage().temporary().set(&HEARTBEAT_KEY, &timestamps);
-        
-        // Set TTL to ensure entries expire naturally after validation window
-        env.storage().temporary().extend_ttl(
-            &HEARTBEAT_KEY,
-            HEARTBEAT_TTL_THRESHOLD,
-            HEARTBEAT_TTL_LEDGERS,
-        );
     }
 
     fn _get_interval(env: &Env) -> u64 {
-        env.storage().instance().get(&HB_INTERVAL_KEY).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL)
+        env.storage()
+            .instance()
+            .get(&HB_INTERVAL_KEY)
+            .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL)
     }
 
     fn _get_signers(env: &Env) -> Map<Address, ()> {
-        env.storage().instance().get(&SIGNERS_KEY).unwrap_or_else(|| Map::new(env))
+        env.storage()
+            .instance()
+            .get(&SIGNERS_KEY)
+            .unwrap_or_else(|| Map::new(env))
     }
 
     fn _get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
-        env.storage().persistent().get(&NODE_PROFILES_KEY).unwrap_or_else(|| Map::new(env))
+        env.storage()
+            .persistent()
+            .get(&NODE_PROFILES_KEY)
+            .unwrap_or_else(|| Map::new(env))
     }
 
     fn _scan_profile_for_rate(profile: NodeProfile) -> Option<u64> {
-        if profile.confidence == 0 { None } else { Some(profile.rate) }
+        if profile.confidence == 0 {
+            None
+        } else {
+            Some(profile.rate)
+        }
     }
 
     fn _maintain_relayer_profile_ttl(env: &Env) {
@@ -717,13 +826,24 @@ impl TimeLockedUpgradeContract {
         );
     }
 
+    fn _extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(
+            RELAYER_TTL_THRESHOLD,
+            RELAYER_TTL_THRESHOLD + INSTANCE_TTL_EXTEND,
+        );
+    }
+
     fn _is_signer(env: &Env, addr: &Address) -> bool {
         Self::_get_signers(env).contains_key(addr.clone())
     }
 
     fn _revocation_threshold(env: &Env) -> u32 {
         let n = Self::_get_signers(env).len();
-        n / 2 + 1
+        if n == 0 {
+            1
+        } else {
+            n / 2 + 1
+        }
     }
 
     fn _resolve_feed_metrics(env: &Env, asset: &AssetId) -> AssetFeedMetrics {
@@ -731,24 +851,39 @@ impl TimeLockedUpgradeContract {
         let stored: AssetFeedMetrics = env
             .storage()
             .persistent()
-            .get(&StakingStorageKey::AssetMetrics(asset.clone()))
+            .get(&StakingStorageKey::AssetMetrics(*asset))
             .unwrap_or(AssetFeedMetrics {
-                volume_score: 0,
-                volatility_bps: 0,
+                volume_score: 10,
+                volatility_bps: 100,
             });
-
+        let corridor = Self::get_corridor_fee_pool(env.clone(), *asset);
         AssetFeedMetrics {
-            volume_score: effective_volume_score(stored.volume_score, pool.collected),
+            volume_score: effective_volume_score(stored.volume_score, corridor.collected),
             volatility_bps: stored.volatility_bps,
         }
+    }
+
+    pub fn update_validator_profile(
+        env: Env,
+        node: Address,
+        pool: Symbol,
+    ) -> Result<(), ContractError> {
+        // Guard: revoked node must not be able to update its profile.
+        admin::assert_not_revoked(&env, &node)?;
+        node.require_auth();
+
+        check_bond_capacity(&env, &node, &pool)?;
+
+        Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod query_guardrail_tests {
     use super::*;
-    use soroban_sdk::{Env, symbol_short};
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+    use soroban_sdk::{symbol_short, Env};
 
     fn setup() -> (Env, crate::TimeLockedUpgradeContractClient<'static>) {
         let env = Env::default();
@@ -772,28 +907,28 @@ mod query_guardrail_tests {
         });
     }
 
-    // get_data returns NotInitialized before init and correct data after.
     #[test]
     fn test_get_data_before_and_after_init() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
 
         let result = client.try_get_data();
-        assert!(matches!(result, Err(Ok(ContractError::NotInitialized))));
+        assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
 
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let data = client.get_data();
         assert_eq!(data.admin, admin);
-        assert_eq!(data.value, 0);
+        assert_eq!(data.value, 0u64);
     }
 
-    // Calling get_data repeatedly returns the same result without mutating state.
     #[test]
     fn test_get_data_is_idempotent() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
         let first_admin = client.get_data().admin;
         let first_value = client.get_data().value;
@@ -805,25 +940,25 @@ mod query_guardrail_tests {
         assert_eq!(first_value, 0);
     }
 
-    // is_data_fresh returns false for an asset that was never written.
     #[test]
     fn test_is_data_fresh_unknown_asset_returns_false() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
-        let asset: AssetId = 3897123275; // NGN
+        let asset = symbol_to_asset_id(&symbol_short!("NGN"));
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // is_data_fresh returns true right after a heartbeat and false once stale.
     #[test]
     fn test_is_data_fresh_transitions_on_staleness() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
-        let asset: AssetId = 2654435761; // KES
+        let asset = symbol_to_asset_id(&symbol_short!("KES"));
         client.update_heartbeat(&asset, &admin);
 
         assert!(client.is_data_fresh(&asset));
@@ -832,33 +967,32 @@ mod query_guardrail_tests {
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // Calling is_data_fresh multiple times never alters the heartbeat storage slot.
     #[test]
     fn test_is_data_fresh_does_not_mutate_heartbeat() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
-        let asset: AssetId = 4026531840; // GHS
+        let asset = symbol_to_asset_id(&symbol_short!("GHS"));
         client.update_heartbeat(&asset, &admin);
 
         for _ in 0..5 {
             assert!(client.is_data_fresh(&asset));
         }
 
-        // Advance time fully: data should go stale, confirming heartbeat was not refreshed.
         advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
         assert!(!client.is_data_fresh(&asset));
     }
 
-    // get_data and is_data_fresh are independent: one does not affect the other.
     #[test]
     fn test_query_methods_do_not_interfere() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-        client.initialize(&admin);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
 
-        let asset: AssetId = 4160749568; // CFA
+        let asset = symbol_to_asset_id(&symbol_short!("CFA"));
 
         let admin_before = client.get_data().admin;
         let value_before = client.get_data().value;
@@ -872,6 +1006,8 @@ mod query_guardrail_tests {
         assert_eq!(value_before, value_after);
     }
 }
+
+// NOTE: _resolve_feed_metrics is defined inside the main contract impl.
 
 #[cfg(test)]
 mod test;

@@ -15,6 +15,53 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "register_signer",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "register_signer",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
@@ -80,6 +127,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
+                  "u32": 4026531840
                   "u32": 4026531840
                 },
                 {
@@ -203,6 +251,7 @@
                 },
                 {
                   "u32": 4026531840
+                  "u32": 4026531840
                 }
               ]
             },
@@ -223,6 +272,7 @@
                     },
                     {
                       "u32": 4026531840
+                      "u32": 4026531840
                     }
                   ]
                 },
@@ -234,6 +284,7 @@
                         "symbol": "asset"
                       },
                       "val": {
+                        "u32": 4026531840
                         "u32": 4026531840
                       }
                     },
@@ -273,6 +324,7 @@
                 },
                 {
                   "u32": 4026531840
+                  "u32": 4026531840
                 }
               ]
             },
@@ -292,6 +344,7 @@
                       "symbol": "AssetMetrics"
                     },
                     {
+                      "u32": 4026531840
                       "u32": 4026531840
                     }
                   ]
@@ -408,7 +461,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ],
       [
@@ -627,7 +680,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ]
     ]
@@ -652,7 +705,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                }
+              ]
             }
           }
         }
@@ -813,6 +873,7 @@
                 },
                 {
                   "u32": 4026531840
+                  "u32": 4026531840
                 },
                 {
                   "u32": 10
@@ -897,6 +958,7 @@
             ],
             "data": {
               "u32": 4026531840
+              "u32": 4026531840
             }
           }
         }
@@ -948,6 +1010,7 @@
               "vec": [
                 {
                   "u32": 4026531840
+                  "u32": 4026531840
                 },
                 {
                   "u64": 2000000000
@@ -984,6 +1047,7 @@
                     "symbol": "asset"
                   },
                   "val": {
+                    "u32": 4026531840
                     "u32": 4026531840
                   }
                 },
@@ -1029,6 +1093,7 @@
               }
             ],
             "data": {
+              "u32": 4026531840
               "u32": 4026531840
             }
           }
@@ -1078,6 +1143,7 @@
               }
             ],
             "data": {
+              "u32": 4026531840
               "u32": 4026531840
             }
           }

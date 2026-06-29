@@ -26,7 +26,7 @@ pub struct AdminChangeProposal {
 // ─── Issue #429: Two-phase ownership transfer ────────────────────────────────
 
 /// Phase 1: current admin nominates a new owner.
-/// Stores the nominee under PNDOWN; does not transfer ownership yet.
+/// Stores the nominee under `PNDOWN`; does not transfer ownership yet.
 pub fn propose_ownership_transfer(
     env: &Env,
     current_admin: Address,
