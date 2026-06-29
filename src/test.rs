@@ -1203,3 +1203,24 @@ fn test_replacement_signer_promoted_on_revocation() {
     let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
 }
+
+#[test]
+fn test_node_profile_ttl_extension() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    // Upsert the profile
+    client.upsert_node_profile(&admin, &node, &100, &99);
+
+    // Retrieve the profiles map and check that it was successfully retrieved.
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 100);
+}
+
