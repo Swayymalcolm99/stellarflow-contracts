@@ -53,8 +53,10 @@ pub use config::{PriceVarianceConfig, get_price_variance_config, set_price_varia
 pub mod consensus;
 pub mod governance;
 pub mod math;
+pub mod slashing;
 pub mod staking_tiers;
-pub mod governance;
+pub mod storage;
+pub mod temp_governance;
 pub mod validation;
 use crate::admin::AdminChangeProposal;
 use crate::governance::{
@@ -62,6 +64,12 @@ use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot,
 };
 use crate::validation::check_bond_capacity;
+use crate::governance::{verify_staged_delay, StagedUpgrade};
+use crate::temp_governance::{
+    store_temp_proposal, get_temp_proposal, has_temp_proposal, remove_temp_proposal,
+    extend_temp_proposal_ttl, EMERGENCY_REVOCATION_TEMP_KEY, REVOCATION_TEMP_KEY,
+    DEFAULT_PROPOSAL_TTL, EXTENDED_PROPOSAL_TTL
+};
 
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
 
@@ -110,16 +118,16 @@ pub enum ContractError {
     TransferAlreadyPending = 24,
     /// No pending owner nominee exists to claim ownership.
     NoPendingOwner = 25,
-    /// Value exceeds the maximum fee ceiling configured for this contract.
-    FeeCeilingExceeded = 26,
-    /// An admin key change proposal is already pending.
-    AdminChangePending = 27,
-    /// Admin change timelock period has not yet elapsed.
-    AdminChangeTimelockNotSatisfied = 28,
-    /// No pending admin change exists.
-    NoAdminChangePending = 29,
-    /// The cosigner address must differ from the proposer address.
-    CosignerCannotBeProposer = 30,
+    /// Attempted to divide by zero in a mathematical operation.
+    DivisionByZero = 26,
+    /// The proposed fee exceeds the maximum allowed ceiling.
+    FeeCeilingExceeded = 27,
+    /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
+    StaleSequence = 33,
+    /// A price-variance configuration field violated one or more struct invariants.
+    InvalidVarianceConfig = 28,
+    /// Incoming telemetry payload's ledger timestamp is too far behind.
+    StaleTelemetryPayload = 34,
 }
 
 // Contract state keys
@@ -302,13 +310,27 @@ impl TimeLockedUpgradeContract {
         if !Self::_is_signer(&env, &voter) && data.admin != voter {
             return Err(ContractError::Unauthorized);
         }
-        let ballot = cast_vote(&env, REVOCATION_KEY, voter)?;
+
+        // ── CHANGED: Retrieve from temporary storage instead of persistent ──
+        let mut proposal: RevocationProposal = get_temp_proposal(&env, &REVOCATION_TEMP_KEY)
+            .ok_or(ContractError::NoActiveProposal)?;
+
+        if proposal.votes.contains_key(voter.clone()) {
+            return Err(ContractError::AlreadyVoted);
+        }
+
+        proposal.votes.set(voter, ());
+
         let threshold = Self::_revocation_threshold(&env);
         if ballot.votes.len() >= threshold {
             let mut contract_data = data;
             contract_data.admin = ballot.replacement.clone();
             env.storage().instance().set(&DATA_KEY, &contract_data);
-            close_ballot(&env, REVOCATION_KEY);
+            // ── CHANGED: Remove from temporary storage instead of persistent ──
+            remove_temp_proposal(&env, &REVOCATION_TEMP_KEY);
+        } else {
+            // ── CHANGED: Store in temporary storage with extended TTL ──
+            store_temp_proposal(&env, &REVOCATION_TEMP_KEY, &proposal, EXTENDED_PROPOSAL_TTL);
         }
         Ok(())
     }
@@ -767,6 +789,26 @@ impl TimeLockedUpgradeContract {
         crate::admin::get_pending_admin_change(&env)
     }
 
+    /// Explicitly purge an expired or stale emergency revocation proposal.
+    ///
+    /// This function allows cleanup of proposals that have failed to reach quorum or
+    /// have become stale. While the Soroban network will eventually auto-purge via TTL,
+    /// explicit removal frees resources sooner and allows reinitiating a new proposal.
+    ///
+    /// This can be called by any party since the primary security model relies on
+    /// the voting threshold for proposal execution, not on proposal creation.
+    pub fn purge_expired_revocation_proposal(env: Env) -> Result<(), ContractError> {
+        admin::purge_emergency_revocation_proposal(&env)
+    }
+
+    /// Check if an emergency revocation proposal is currently active.
+    ///
+    /// Returns true only if the proposal exists in temporary storage and hasn't expired
+    /// according to Soroban's TTL mechanism.
+    pub fn has_active_revocation_proposal(env: Env) -> bool {
+        admin::has_active_emergency_revocation(&env)
+    }
+
     // --- Private Helpers ---
 
     fn assert_contract_is_active(env: &Env) -> Result<(), ContractError> {
@@ -804,10 +846,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
-        env.storage()
-            .persistent()
-            .get(&NODE_PROFILES_KEY)
-            .unwrap_or_else(|| Map::new(env))
+        crate::storage::get_node_profiles(env)
     }
 
     fn _scan_profile_for_rate(profile: NodeProfile) -> Option<u64> {

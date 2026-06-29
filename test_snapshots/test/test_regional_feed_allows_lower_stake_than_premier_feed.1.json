@@ -2046,6 +2046,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
+<<<<<<< identity-access
                 "symbol": "stake_and_register_for_feed"
               }
             ],
@@ -2192,3 +2193,6 @@
     }
   ]
 }
+=======
+                "symbol": "stake_and_register_for_fee
+>>>>>>> main
