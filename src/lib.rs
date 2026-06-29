@@ -131,9 +131,11 @@ pub enum ContractError {
     /// The proposed fee exceeds the maximum allowed ceiling.
     FeeCeilingExceeded = 27,
     /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
-    StaleSequence = 26,
+    StaleSequence = 33,
     /// A price-variance configuration field violated one or more struct invariants.
     InvalidVarianceConfig = 28,
+    /// Incoming telemetry payload's ledger timestamp is too far behind.
+    StaleTelemetryPayload = 34,
 }
 
 // Contract state keys
@@ -1026,10 +1028,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
-        env.storage()
-            .persistent()
-            .get(&NODE_PROFILES_KEY)
-            .unwrap_or_else(|| Map::new(env))
+        crate::storage::get_node_profiles(env)
     }
 
     fn _scan_profile_for_rate(profile: NodeProfile) -> Option<u64> {
